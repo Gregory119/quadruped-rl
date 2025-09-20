@@ -1,0 +1,9 @@
+*~
+build
+*.log
+*.run.xml
+*.out
+auto
+__pycache__
+logs
+.ipynb_checkpoints

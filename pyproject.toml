@@ -1,0 +1,24 @@
+[project]
+name = "quadruped-rl"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "Gregory Jones",email = "greggie119gj@gmail.com"}
+]
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "gymnasium[mujoco] (>=1.2.0,<2.0.0)",
+    "stable-baselines3 (>=2.7.0,<3.0.0)",
+    "numpy (>=2.3.3,<3.0.0)",
+    "robot-descriptions (>=1.21.0,<2.0.0)",
+    "debugpy (>=1.8.17,<2.0.0)",
+    "mujoco-python-viewer (>=0.1.4,<0.2.0)"
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry] # only here so that poetry-mode in emacs works
