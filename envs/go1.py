@@ -95,9 +95,22 @@ class Go1Env(MujocoEnv):
         self.prev_step_ts_ns = time.perf_counter_ns()
 
 
+    def get_obs():
+        # actuated joint positions and velocities
+        qpos = np.zeros((12,))
+        qvel = np.zeros((12,))
+        for i in range(self.model.nu):
+            id = self.model.actuator(i).id
+            qpos[i] = self.data.qpos[id]
+            qvel[i] = self.data.qvel[id]
+
+        return np.concatenate((qpos,qvel))
+
+        
+    # override
     def reset_model(self) -> NDArray[np.float64]:
         """
         Reset the robot state.
         """
         self.set_state(qpos=self.init_qpos, qvel=self.init_qvel)
-        return self.data.qpos
+        return self.get_obs()
