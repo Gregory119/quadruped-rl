@@ -10,7 +10,7 @@ from os import path
 
 DEFAULT_CAMERA_CONFIG = {
     "trackbodyid": 0,
-    "distance": 1.5,
+    "distance": 3,
 }
 
 class Go1Env(MujocoEnv):
@@ -32,10 +32,12 @@ class Go1Env(MujocoEnv):
 
         observation_space = Box(low=-np.inf, high=np.inf, shape=(24,), dtype=np.float64)
 
+        self.goal_pos_world = np.array([0.4, -0.15, 0.2])
+
         # todo: set mujoco simulation timestep (assumed for now)
-        mj_timestep = 0.001
+        self.mj_timestep = 0.001
         env_timestep = 1 / rate_hz
-        frame_skip = int(env_timestep // mj_timestep)
+        frame_skip = int(env_timestep // self.mj_timestep)
         MujocoEnv.__init__(self,
                            model_path=xml_file,
                            frame_skip=frame_skip,
@@ -68,14 +70,47 @@ class Go1Env(MujocoEnv):
             self.mujoco_renderer.viewer.vopt.sitegroup[self.model.site("FR").group] = 1
             
 
-        reward = 0
+        # reward
+        reward = self.get_reward()
+
+        
+        # timeout truncation handled externally so set false here
         truncated = False
         terminated = False
-        obs = self.data.qpos
+        obs = self.get_obs()
         info = {}
 
         return obs, reward, terminated, truncated, info
 
+
+    def get_reward(self):
+        # foot distance from goal position
+
+        # The goal and foot position must always be in the same frame in order
+        # to calculate the norm of the distance between them. Only the desired
+        # foot position is an input to the policy, not the current foot
+        # position. If the world frame is used as the reference, then it
+        # requires the input goal position to also be in this world frame. To
+        # make the policy agnostic to the world frame, rather use the base frame
+        # of the robot.
+
+        pos_foot_world = self.data.site("FR").xpos
+        
+        # get pose of trunk frame relative to world frame and invert
+        Rwt = self.data.body("trunk").xmat.copy().reshape((3,3))
+        pwt = self.data.body("trunk").xpos
+        inv_Twt = np.zeros((4,4))
+        inv_Twt[:3,:3] = np.transpose(Rwt)
+        inv_Twt[:3,3] = -np.transpose(Rwt) @ pwt
+
+        # represent current and goal foot position in robot base frame
+        pos_foot_trunk_homo = inv_Twt @ np.concatenate((pos_foot_world, [1]))
+        pos_foot_trunk = pos_foot_trunk_homo[:3]
+        goal_pos_trunk_homo = inv_Twt @ np.concatenate((self.goal_pos_world, [1]))
+        goal_pos_trunk = goal_pos_trunk_homo[:3]
+        
+        return np.exp(-np.linalg.norm(pos_foot_trunk - goal_pos_trunk) / 0.6)
+    
         
     def _step_sleep(self, display_rate=False):
         """Call this within step() to sleep the required amount to meet the
@@ -124,3 +159,31 @@ class Go1Env(MujocoEnv):
         """
         self.set_state(qpos=self.init_qpos, qvel=self.init_qvel)
         return self.get_obs()
+
+
+    # override
+    def _initialize_simulation(self) -> tuple["mujoco.MjModel", "mujoco.MjData"]:
+        """
+        Initialize MuJoCo simulation data structures `mjModel` and `mjData`.
+        """
+        # load the model specification
+        spec = mujoco.MjSpec.from_file(self.fullpath)
+
+        # add sites whose frames will be displayed by default
+
+        # add a site for the goal
+        spec.worldbody.add_site(
+            pos=self.goal_pos_world,
+            quat=[0, 1, 0, 0],
+        )
+
+        # compile model and create data
+        model = spec.compile()
+        model.vis.global_.offwidth = self.width
+        model.vis.global_.offheight = self.height
+        data = mujoco.MjData(model)
+
+        # set simulation timestep
+        model.opt.timestep = self.mj_timestep
+
+        return model, data
