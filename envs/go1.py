@@ -29,7 +29,7 @@ class Go1Env(MujocoEnv):
         if not path.exists(xml_file):
             raise FileNotFoundError(f"Mujoco model not found: {xml_file}")
 
-        observation_space = Box(low=-np.inf, high=np.inf, shape=(19,), dtype=np.float64)
+        observation_space = Box(low=-np.inf, high=np.inf, shape=(24,), dtype=np.float64)
 
         # todo: set mujoco simulation timestep (assumed for now)
         mj_timestep = 0.001
@@ -95,7 +95,7 @@ class Go1Env(MujocoEnv):
         self.prev_step_ts_ns = time.perf_counter_ns()
 
 
-    def get_obs():
+    def get_obs(self):
         # actuated joint positions and velocities
         qpos = np.zeros((12,))
         qvel = np.zeros((12,))
