@@ -8,6 +8,17 @@ import time
 from os import path
 
 
+def inv_htrans(T: NDArray[np.float64]):
+    """Invert a homogeneous transformation."""
+    assert(T.shape == (4,4))
+    R = T[:3, :3]
+    p = p[:3, 3]
+    inv_T = np.zeros((4,4))
+    inv_T[:3,:3] = np.transpose(R)
+    inv_T[:3,3] = -np.transpose(R) @ p
+    return inv_T
+
+
 DEFAULT_CAMERA_CONFIG = {
     "trackbodyid": 0,
     "distance": 3,
@@ -97,16 +108,12 @@ class Go1Env(MujocoEnv):
         pos_foot_world = self.data.site("FR").xpos
         
         # get pose of trunk frame relative to world frame and invert
-        Rwt = self.data.body("trunk").xmat.copy().reshape((3,3))
-        pwt = self.data.body("trunk").xpos
-        inv_Twt = np.zeros((4,4))
-        inv_Twt[:3,:3] = np.transpose(Rwt)
-        inv_Twt[:3,3] = -np.transpose(Rwt) @ pwt
+        Twt = self.get_trunk_frame()
 
         # represent current and goal foot position in robot base frame
-        pos_foot_trunk_homo = inv_Twt @ np.concatenate((pos_foot_world, [1]))
+        pos_foot_trunk_homo = inv_htrans(Twt) @ np.concatenate((pos_foot_world, [1]))
         pos_foot_trunk = pos_foot_trunk_homo[:3]
-        goal_pos_trunk_homo = inv_Twt @ np.concatenate((self.goal_pos_world, [1]))
+        goal_pos_trunk_homo = inv_htrans(Twt) @ np.concatenate((self.goal_pos_world, [1]))
         goal_pos_trunk = goal_pos_trunk_homo[:3]
         
         return np.exp(-np.linalg.norm(pos_foot_trunk - goal_pos_trunk) / 0.6)
@@ -149,7 +156,49 @@ class Go1Env(MujocoEnv):
             qpos[i] = self.data.qpos[id]
             qvel[i] = self.data.qvel[id]
 
-        return np.concatenate((qpos,qvel))
+        # height of robot trunk frame
+        h = self.data.body("trunk").xpos[2]
+
+        # Get the spatial velocity (twist) of the trunk body in the inertial
+        # frame of the body located at the c.o.m. The linear velocity component
+        # of a twist is the linear velocity of the body attached point
+        # instantaneouly located at the frame origin in which the twist is
+        # represented. This means that the linear velocity of the twist in the
+        # inertial body frame is the linear velocity of the c.o.m of the body.
+        twist_trunk = np.zeros((6,))
+        mujoco.mj_objectVelocity(self.model,
+                                 self.data,
+                                 mujoco.mjObj.mjOBJ_BODY,
+                                 self.model.body("trunk").id,
+                                 twist_trunk,
+                                 True) # use local frame orientation
+        omega_i = twist_trunk[:3]
+        vel_i = twist_trunk[3:]
+
+        # transform trunk velocities from the inertial frame to the body frame
+        Twt = self.get_trunk_frame()
+        Twi = self.get_trunk_iframe()
+        Tti = inv_htrans(Twt) @ Twi
+        vel = Tti @ vel_i
+        omega = Tti @ omega_i
+
+        return np.concatenate((qpos,qvel, vel, omega, h))
+
+
+    def get_trunk_frame(self):
+        """Get pose of trunk body frame w.r.t world frame."""
+        Twt = np.identity(4)
+        Twt[:3,:3] = self.data.body("trunk").xmat.copy().reshape((3,3))
+        Twt[:3,3] = self.data.body("trunk").xpos.copy()
+        return Twt
+    
+
+    def get_trunk_iframe(self):
+        """Get the pose of the trunk inertial frame w.r.t world frame."""
+        T = np.identity(4)
+        T[:3,:3] = self.data.body("trunk").ximat.copy().reshape((3,3))
+        T[:3,3] = self.data.body("trunk").xipos.copy()
+        return T
 
         
     # override
