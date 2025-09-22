@@ -1,6 +1,7 @@
 from gymnasium.envs.mujoco import MujocoEnv
 from gymnasium.spaces import Box
 
+import mujoco
 import numpy as np
 from numpy.typing import NDArray
 import time
@@ -57,6 +58,15 @@ class Go1Env(MujocoEnv):
         # visualization
         if self.render_mode == "human":
             self.render()
+            
+            # Visualize the site frames. This is a bit of a hack but it works
+            # and is simple. This is specifically done after self.render() to
+            # ensure that the renderer exists.
+            self.mujoco_renderer.viewer.vopt.frame = mujoco.mjtFrame.mjFRAME_SITE
+
+            # enable visualization of the site frames at the feet
+            self.mujoco_renderer.viewer.vopt.sitegroup[self.model.site("FR").group] = 1
+            
 
         reward = 0
         truncated = False
