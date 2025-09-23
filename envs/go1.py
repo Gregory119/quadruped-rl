@@ -92,7 +92,7 @@ class Go1Env(MujocoEnv):
         
         # timeout truncation handled externally so set false here
         truncated = False
-        terminated = False
+        terminated = self.fallen()
         obs = self.get_obs()
         info = {}
 
@@ -218,6 +218,15 @@ class Go1Env(MujocoEnv):
         T[:3,:3] = self.data.body("trunk").ximat.copy().reshape((3,3))
         T[:3,3] = self.data.body("trunk").xipos.copy()
         return T
+
+    
+    def fallen(self):
+        # if any component of the z axis of the trunk frame is directed down,
+        # then the robot has fallen
+        Twt = self.get_trunk_frame()
+        # trunk z-axis represented in the world frame
+        z = Twt[:3,2]
+        return z[2] < 0.0
 
         
     # override
