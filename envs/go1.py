@@ -175,13 +175,13 @@ class Go1Env(MujocoEnv):
         twist_trunk_b = np.zeros((6,))
         Twt = self.get_trunk_frame()
         Twi = self.get_trunk_iframe()
-        Tti = inv_htrans(Twt) @ Twi
-        mujoco.mju_transformSpatial(twist_trunk_b,
-                                    twist_trunk_i,
+        Tit = inv_htrans(Twi) @ Twt
+        mujoco.mju_transformSpatial(twist_trunk_b, # result
+                                    twist_trunk_i, # old twist
                                     False, # motion vectors (not force)
-                                    Twt[:3,3], # newpos
-                                    Twi[:3,3], # oldpos
-                                    Tti[:3,:3]); # rotnew2old
+                                    Tit[:3,3], # newpos expressed in old frame
+                                    np.zeros((3,)), # oldpos expressed in old frame
+                                    Tit[:3,:3].ravel()); # rotnew2old new relative to old
         
         omega = twist_trunk_b[:3]
         vel = twist_trunk_b[3:]
