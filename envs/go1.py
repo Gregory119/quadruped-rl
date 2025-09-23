@@ -12,7 +12,7 @@ def inv_htrans(T: NDArray[np.float64]):
     """Invert a homogeneous transformation."""
     assert(T.shape == (4,4))
     R = T[:3, :3]
-    p = p[:3, 3]
+    p = T[:3, 3]
     inv_T = np.zeros((4,4))
     inv_T[:3,:3] = np.transpose(R)
     inv_T[:3,3] = -np.transpose(R) @ p
@@ -41,7 +41,7 @@ class Go1Env(MujocoEnv):
         if not path.exists(xml_file):
             raise FileNotFoundError(f"Mujoco model not found: {xml_file}")
 
-        observation_space = Box(low=-np.inf, high=np.inf, shape=(24,), dtype=np.float64)
+        observation_space = Box(low=-np.inf, high=np.inf, shape=(37,), dtype=np.float64)
 
         self.goal_pos_world = np.array([0.4, -0.15, 0.2])
 
@@ -57,6 +57,11 @@ class Go1Env(MujocoEnv):
                            **kwargs)
 
         self.prev_step_ts_ns = None
+
+        # goal position in trunk frame
+        Twt = self.get_trunk_frame()
+        goal_pos_trunk_homo = inv_htrans(Twt) @ np.concatenate((self.goal_pos_world, [1]))
+        self.goal_pos_trunk = goal_pos_trunk_homo[:3]
 
 
     def step(self, action):
@@ -113,10 +118,8 @@ class Go1Env(MujocoEnv):
         # represent current and goal foot position in robot base frame
         pos_foot_trunk_homo = inv_htrans(Twt) @ np.concatenate((pos_foot_world, [1]))
         pos_foot_trunk = pos_foot_trunk_homo[:3]
-        goal_pos_trunk_homo = inv_htrans(Twt) @ np.concatenate((self.goal_pos_world, [1]))
-        goal_pos_trunk = goal_pos_trunk_homo[:3]
         
-        return np.exp(-np.linalg.norm(pos_foot_trunk - goal_pos_trunk) / 0.6)
+        return np.exp(-np.linalg.norm(pos_foot_trunk - self.goal_pos_trunk) / 0.6)
     
         
     def _step_sleep(self, display_rate=False):
@@ -159,6 +162,12 @@ class Go1Env(MujocoEnv):
         # height of robot trunk frame
         h = self.data.body("trunk").xpos[2]
 
+        # gravity vector in trunk body frame
+        Twt = self.get_trunk_frame()
+        gravity_world = self.model.opt.gravity
+        gravity_trunk_h = inv_htrans(Twt) @ np.concatenate((gravity_world, [1]))
+        gravity_trunk = gravity_trunk_h[:3]
+
         # Get the spatial velocity (twist) of the trunk body in the inertial
         # frame of the body (located at the c.o.m) and then transform the
         # spatial velocity to the body frame. The resulting linear velocity
@@ -167,13 +176,12 @@ class Go1Env(MujocoEnv):
         twist_trunk_i = np.zeros((6,))
         mujoco.mj_objectVelocity(self.model,
                                  self.data,
-                                 mujoco.mjObj.mjOBJ_BODY,
+                                 mujoco.mjtObj.mjOBJ_BODY,
                                  self.model.body("trunk").id,
                                  twist_trunk_i,
                                  True) # use local frame orientation
 
         twist_trunk_b = np.zeros((6,))
-        Twt = self.get_trunk_frame()
         Twi = self.get_trunk_iframe()
         Tit = inv_htrans(Twi) @ Twt
         mujoco.mju_transformSpatial(twist_trunk_b, # result
@@ -185,9 +193,16 @@ class Go1Env(MujocoEnv):
         
         omega = twist_trunk_b[:3]
         vel = twist_trunk_b[3:]
+        
+        return np.concatenate((qpos, qvel, vel, omega, [h], self.goal_pos_trunk, gravity_trunk))
 
-        return np.concatenate((qpos,qvel, vel, omega, h))
 
+    def goal_pos_in_trunk(self):
+        """Get the foot goal position in the trunk body frame."""
+        Twt = self.get_trunk_frame()
+        goal_pos_trunk_homo = inv_htrans(Twt) @ np.concatenate((self.goal_pos_world, [1]))
+        return goal_pos_trunk_homo[:3]
+    
 
     def get_trunk_frame(self):
         """Get pose of trunk body frame w.r.t world frame."""
