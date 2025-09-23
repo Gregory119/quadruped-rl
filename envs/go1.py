@@ -160,27 +160,31 @@ class Go1Env(MujocoEnv):
         h = self.data.body("trunk").xpos[2]
 
         # Get the spatial velocity (twist) of the trunk body in the inertial
-        # frame of the body located at the c.o.m. The linear velocity component
-        # of a twist is the linear velocity of the body attached point
-        # instantaneouly located at the frame origin in which the twist is
-        # represented. This means that the linear velocity of the twist in the
-        # inertial body frame is the linear velocity of the c.o.m of the body.
-        twist_trunk = np.zeros((6,))
+        # frame of the body (located at the c.o.m) and then transform the
+        # spatial velocity to the body frame. The resulting linear velocity
+        # component is of the body attached point at the frame origin. Note that
+        # the body frame is considered to be instantaneously stationary.
+        twist_trunk_i = np.zeros((6,))
         mujoco.mj_objectVelocity(self.model,
                                  self.data,
                                  mujoco.mjObj.mjOBJ_BODY,
                                  self.model.body("trunk").id,
-                                 twist_trunk,
+                                 twist_trunk_i,
                                  True) # use local frame orientation
-        omega_i = twist_trunk[:3]
-        vel_i = twist_trunk[3:]
 
-        # transform trunk velocities from the inertial frame to the body frame
+        twist_trunk_b = np.zeros((6,))
         Twt = self.get_trunk_frame()
         Twi = self.get_trunk_iframe()
         Tti = inv_htrans(Twt) @ Twi
-        vel = Tti @ vel_i
-        omega = Tti @ omega_i
+        mujoco.mju_transformSpatial(twist_trunk_b,
+                                    twist_trunk_i,
+                                    False, # motion vectors (not force)
+                                    Twt[:3,3], # newpos
+                                    Twi[:3,3], # oldpos
+                                    Tti[:3,:3]); # rotnew2old
+        
+        omega = twist_trunk_b[:3]
+        vel = twist_trunk_b[3:]
 
         return np.concatenate((qpos,qvel, vel, omega, h))
 
