@@ -1,12 +1,40 @@
-from isaaclab.sim as sim_utils
+"""Launch Isaac Sim Simulator first."""
+
+import argparse
+
+from isaaclab.app import AppLauncher
+
+# add argparse arguments
+parser = argparse.ArgumentParser(description="Test RL environment for Go1.")
+parser.add_argument("--num_envs", type=int, default=3, help="Number of environments to spawn.")
+
+# append AppLauncher cli args
+AppLauncher.add_app_launcher_args(parser)
+# parse the arguments
+args_cli = parser.parse_args()
+
+# launch omniverse app
+app_launcher = AppLauncher(args_cli)
+simulation_app = app_launcher.app
+
+"""Rest everything follows."""
+
+import torch
+import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg
 from isaaclab.utils import configclass
-
-# pre-defined configs
-from isaaclab_assets import CARTPOLE_CFG
+from isaaclab.managers import ObservationGroupCfg as ObsGroup
+from isaaclab.managers import ObservationTermCfg as ObsTerm
+from isaaclab.managers import RewardTermCfg as RewTerm
+from isaaclab.managers import TerminationTermCfg as DoneTerm
+from isaaclab.scene import InteractiveSceneCfg
 
 import isaaclab.envs.mdp as mdp
 from isaaclab.envs import ManagerBasedRLEnvCfg
+from isaaclab.envs import ManagerBasedRLEnv
+
+# pre-defined configs
+from isaaclab_assets import UNITREE_GO1_CFG
 
 
 @configclass
@@ -20,13 +48,13 @@ class Go1SceneCfg(InteractiveSceneCfg):
 
 
 @configclass
-class ActionCfg:
+class ActionsCfg:
     joint_positions = mdp.JointPositionActionCfg(asset_name="robot", joint_names=[".*"], use_default_offset=True)
 
 
 @configclass
 class ObservationsCfg:
-"""Observation specifications for the environment."""
+    """Observation specifications for the environment."""
 
     @configclass
     class PolicyCfg(ObsGroup):
@@ -46,21 +74,21 @@ class ObservationsCfg:
 
 @configclass
 class RewardsCfg:
-    # todo
+    alive = RewTerm(func=mdp.is_alive, weight=1.0)
 
 
 @configclass
 class TerminationCfg:
-    # todo
+    time_out = DoneTerm(func=mdp.time_out, time_out=True)
 
 
 @configclass
 class Go1EnvCfg(ManagerBasedRLEnvCfg):
     # Scene settings
-    scene = Go1SceneCfg(num_envs=3, env_spacing=2.5)
+    scene: Go1SceneCfg = Go1SceneCfg(num_envs=3, env_spacing=2.5)
     # Basic settings
-    observations = ObservationsCfg()
-    actions = ActionsCfg()
+    observations: ObservationsCfg = ObservationsCfg()
+    actions: ActionsCfg = ActionsCfg()
     # leave events to reset to default state (don't set 'events')
     rewards: RewardsCfg = RewardsCfg()
     terminations: TerminationCfg = TerminationCfg()
@@ -72,14 +100,32 @@ class Go1EnvCfg(ManagerBasedRLEnvCfg):
         self.viewer.lookat = [0.0, 0.0, 2.0]
         # step settings
         self.decimation = 4  # env step every 4 sim steps: 200Hz / 4 = 50Hz
+        self.episode_length_s = 5
         # simulation settings
         self.sim.dt = 0.005  # sim step every 5ms: 200Hz
 
 
-
 def main():
+    # create environment configuration
+    env_cfg = Go1EnvCfg()
+    env_cfg.scene.num_envs = args_cli.num_envs
+    env_cfg.sim.device = args_cli.device
+    # setup RL environment
+    env = ManagerBasedRLEnv(cfg=env_cfg)
 
+    # simulate physics
+    count = 0
+    while simulation_app.is_running():
+        with torch.inference_mode():
+            # sample random actions
+            joint_positions = torch.randn_like(env.action_manager.action)
+            # step the environment
+            obs, rew, terminated, truncated, info = env.step(joint_positions)
+
+    # close the environment
+    env.close()
 
 
 if __name__ == "__main__":
-main()
+    main()
+    simulation_app.close()
