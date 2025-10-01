@@ -30,6 +30,7 @@ from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
 
 import isaaclab.envs.mdp as mdp
+import isaac_labs_envs as envs
 from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.envs import ManagerBasedRLEnv
 
@@ -61,8 +62,26 @@ class ObservationsCfg:
         """Observations for policy group."""
 
         # observation terms (order preserved)
+
+        # joint positions and velocities relative to the default values
         joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel)
         joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel)
+
+        # gravity vector in the base frame
+        base_gravity = ObsTerm(func=mdp.projected_gravity)
+
+        # robot base height relative to world frame, expressed in the world frame
+        base_pos_z = ObsTerm(func=mdp.base_pos_z)
+
+        # linear velocity of the base expressed in the base frame
+        base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
+
+        # angular velocity of the base expressed in the base frame
+        base_ang_vel = ObsTerm(func=mdp.base_ang_vel)
+
+        # foot pose command
+        foot_pose_command = ObsTerm(func=mdp.generated_commands,
+                                    params={"command_name": "right_foot_pose"})
 
         def __post_init__(self) -> None:
             self.enable_corruption = False
@@ -83,6 +102,26 @@ class TerminationCfg:
 
 
 @configclass
+class CommandsCfg:
+    # Pose commands are generated in the environment frame and represented in
+    # the base frame of the robot
+    right_foot_pose = envs.UniformEnvPoseCommandCfg(
+        asset_name = "robot",
+        body_name = "FR_foot",
+        resampling_time_range = (5.0, 5.0),
+        debug_vis = True,
+        ranges = mdp.UniformPoseCommandCfg.Ranges(
+            pos_x = (0.4, 0.4),
+            pos_y = (-0.15, -0.15),
+            pos_z = (0.2, 0.2),
+            roll = (0.0, 0.0),
+            pitch = (0.0, 0.0),
+            yaw = (0.0, 0.0),
+        )
+    )
+    
+    
+@configclass
 class Go1EnvCfg(ManagerBasedRLEnvCfg):
     # Scene settings
     scene: Go1SceneCfg = Go1SceneCfg(num_envs=3, env_spacing=2.5)
@@ -92,6 +131,7 @@ class Go1EnvCfg(ManagerBasedRLEnvCfg):
     # leave events to reset to default state (don't set 'events')
     rewards: RewardsCfg = RewardsCfg()
     terminations: TerminationCfg = TerminationCfg()
+    commands: CommandsCfg = CommandsCfg()
 
     def __post_init__(self):
         """Post initialization."""
