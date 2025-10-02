@@ -34,6 +34,9 @@ import isaac_labs_envs as envs
 from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.envs import ManagerBasedRLEnv
 
+from isaaclab.utils.math import subtract_frame_transforms
+
+
 # pre-defined configs
 from isaaclab_assets import UNITREE_GO1_CFG
 
@@ -91,9 +94,45 @@ class ObservationsCfg:
     policy: PolicyCfg = PolicyCfg()
 
 
+# helper function for calculating the reward for foot tracking
+def track_foot_exp(env: ManagerBasedRLEnv,
+                   var: float,
+                   foot_body_name="FR_foot",
+                   command_name="right_foot_pose"):
+    assert(var >= 0.0)
+    # get foot target in base frame (Tbg)
+    pose_goal_b = env.command_manager.get_command(command_name)
+
+    # get foot body id/index
+    robot = env.scene["robot"]
+    body_ids, _ = robot.find_bodies(foot_body_name)
+    assert(len(body_ids)==1)
+    body_idx = body_ids[0]
+
+    # current foot pose in world frame (Twf)
+    pos_foot_w = robot.data.body_pos_w[:, body_idx]
+    quat_foot_w = robot.data.body_quat_w[:, body_idx]
+
+    # transform current foot pose into robot base frame
+    pose_base_w = robot.data.root_pose_w # Twb
+    # Tbf = Twb^{-1} Twf
+    pos_foot_b, quat_foot_b = subtract_frame_transforms(
+        pose_base_w[:,:3],
+        pose_base_w[:,3:],
+        pos_foot_w,
+        quat_foot_w,
+    )
+
+    # position error
+    pos_error = pos_foot_b - pose_goal_b[:,:3]
+
+    # calculate reward
+    return torch.exp(-torch.norm(pos_error, dim=1) / var)
+
+
 @configclass
 class RewardsCfg:
-    alive = RewTerm(func=mdp.is_alive, weight=1.0)
+    foot_tracking = RewTerm(func=track_foot_exp, weight=1.0, params={"var": 0.6})
 
 
 @configclass
