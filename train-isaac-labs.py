@@ -34,6 +34,11 @@ import gymnasium as gym
 
 import isaac_labs_envs
 from isaaclab_tasks.utils import parse_env_cfg
+from isaaclab_rl.sb3 import Sb3VecEnvWrapper
+
+from stable_baselines3 import PPO
+
+import contextlib
 
 
 def main():
@@ -45,6 +50,12 @@ def main():
     # create environment
     env = gym.make(args_cli.task, cfg=env_cfg)
 
+    # wrap environment so that it can be used with stable baselines3
+    env = Sb3VecEnvWrapper(env, fast_variant=True)
+    # todo: move this to config file
+    policy_arch = "MlpPolicy"
+    agent = PPO(policy_arch, env)
+
     # print info (this is vectorized environment)
     print(f"[INFO]: Gym observation space: {env.observation_space}")
     print(f"[INFO]: Gym action space: {env.action_space}")
@@ -52,13 +63,12 @@ def main():
     # reset environment
     env.reset()
 
-    # simulate environment
-    while simulation_app.is_running():
-        with torch.inference_mode():
-            # sample random actions
-            joint_positions = torch.randn(env.action_space.shape, device=env.unwrapped.device)
-            # step the environment
-            obs, rew, terminated, truncated, info = env.step(joint_positions)
+    # train agent
+    with contextlib.suppress(KeyboardInterrupt):
+        agent.learn(
+            total_timesteps=50000,
+            progress_bar=True,
+        )
 
     # close the environment
     env.close()
