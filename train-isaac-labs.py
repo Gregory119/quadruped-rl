@@ -19,6 +19,7 @@ parser.add_argument(
 )
 parser.add_argument("--num_envs", type=int, default=3, help="Number of environments to spawn.")
 parser.add_argument("--task", type=str, default=None, help="Name of task/environment")
+parser.add_argument("--log_interval", type=int, default=100, help="Number of timesteps per environment to log data.")
 parser.add_argument(
     "--agent", type=str, default="sb3_cfg_entry_point", help="Name of the RL agent configuration entry point."
 )
@@ -52,21 +53,65 @@ import isaac_labs_envs
 from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab_tasks.utils import parse_env_cfg
 from isaaclab_tasks.utils.hydra import hydra_task_config
-from isaaclab_rl.sb3 import Sb3VecEnvWrapper
+from isaaclab_rl.sb3 import Sb3VecEnvWrapper, process_sb3_cfg
+from isaaclab.utils.io import dump_pickle, dump_yaml
 
 from stable_baselines3 import PPO
+from stable_baselines3.common.callbacks import CheckpointCallback, LogEveryNTimesteps
 
 import contextlib
+from pathlib import Path
+from datetime import datetime
+import os
+
+
+def create_log_dir():
+    # directory for logging into
+    run_info = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    log_root_path = os.path.abspath(os.path.join("logs", "sb3", args_cli.task))
+    print(f"[INFO] Logging experiment in directory: {log_root_path}")
+    log_dir = os.path.join(log_root_path, run_info)
+    return log_dir
+
+
+def save_run_cfg(log_dir: str, env_cfg: ManagerBasedRLEnvCfg, agent_cfg: dict):
+    # dump the configuration into log-directory
+    dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
+    dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
+    dump_pickle(os.path.join(log_dir, "params", "env.pkl"), env_cfg)
+    dump_pickle(os.path.join(log_dir, "params", "agent.pkl"), agent_cfg)
+
+    # save command used to run the script
+    command = " ".join(sys.orig_argv)
+    (Path(log_dir) / "command.txt").write_text(command)
+
+
+def post_process_cfg(log_dir, env_cfg, agent_cfg):
+    # override hydra configuration with ArgumentParser arguments
+    env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
+    env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
+    agent_cfg["device"] = args_cli.device if args_cli.device is not None else env_cfg.sim.device
+    # post-process agent configuration (convert value strings to types)
+    agent_cfg = process_sb3_cfg(agent_cfg, env_cfg.scene.num_envs)
+    # set the log directory for the environment (works for all environment types)
+    env_cfg.log_dir = log_dir
+
+
+# todo:
+# - video recording
+# - normalization
+# - create agent from command line checkpoint
+# - sb3 callbacks: save checkpoints
 
 
 @hydra_task_config(task_name=args_cli.task, agent_cfg_entry_point=args_cli.agent)
 def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: dict):
-    # override hydra configuration with ArgumentParser arguments
-    env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
-    env_steps = args_cli.env_steps
-    env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
-    agent_cfg["device"] = args_cli.device if args_cli.device is not None else env_cfg.sim.device
+    log_dir = create_log_dir()
+    
+    post_process_cfg(log_dir=log_dir, env_cfg=env_cfg, agent_cfg=agent_cfg)
 
+    save_run_cfg(log_dir=log_dir, env_cfg=env_cfg, agent_cfg=agent_cfg)
+    
     # create environment using environment configuration
     env = gym.make(args_cli.task, cfg=env_cfg)
 
@@ -75,7 +120,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: dict):
 
     # create agent/policy using agent configuration
     policy_arch = agent_cfg.pop("policy")
-    agent = PPO(policy_arch, env, verbose=1, **agent_cfg)
+    agent = PPO(policy_arch, env, tensorboard_log=log_dir, verbose=1, **agent_cfg)
 
     # print info (this is vectorized environment)
     print(f"[INFO]: Gym observation space: {env.observation_space}")
@@ -84,13 +129,22 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: dict):
     # reset environment
     env.reset()
 
+    callbacks = [LogEveryNTimesteps(n_steps=args_cli.log_interval*env_cfg.scene.num_envs)]
+    
     # train agent
+    print("Training...")
     with contextlib.suppress(KeyboardInterrupt):
         agent.learn(
-            total_timesteps=env_steps*env_cfg.scene.num_envs,
+            total_timesteps=args_cli.env_steps*env_cfg.scene.num_envs,
+            callback=callbacks,
             progress_bar=True,
+            log_interval=None,
         )
 
+    # save the final model
+    print("Trainging complete. Saving model.")
+    agent.save(os.path.join(log_dir, "model"))
+        
     # close the environment
     env.close()
 
