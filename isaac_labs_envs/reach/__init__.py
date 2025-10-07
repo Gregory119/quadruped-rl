@@ -6,5 +6,6 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": f"{__name__}.reach_go1_env_cfg:ReachGo1EnvCfg",
+        "sb3_cfg_entry_point": f"{__name__}:sb3_ppo_cfg.yaml",
     }
 )
