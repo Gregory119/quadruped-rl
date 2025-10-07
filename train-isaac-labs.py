@@ -1,205 +1,203 @@
-"""Launch Isaac Sim Simulator first."""
+"""Run as:
+python train-isaac-labs.py --task <env. name>
+
+eg.
+python train-isaac-labs.py --task Isaac-Reach-Go1-v0
+"""
+
+# Launch Isaac Sim Simulator first
 
 import argparse
+import sys
 
 from isaaclab.app import AppLauncher
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Test RL environment for Go1.")
+parser.add_argument(
+    "--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations."
+)
 parser.add_argument("--num_envs", type=int, default=3, help="Number of environments to spawn.")
+parser.add_argument("--task", type=str, default=None, help="Name of task/environment")
+parser.add_argument("--log_interval", type=int, default=100, help="Number of timesteps per environment to log data.")
+parser.add_argument(
+    "--agent", type=str, default="sb3_cfg_entry_point", help="Name of the RL agent configuration entry point."
+)
+parser.add_argument("--env_steps", type=int, default=100000, help="Number of steps per environment instance.")
+parser.add_argument(
+    "--keep_all_info",
+    action="store_true",
+    default=False,
+    help="Use a slower SB3 wrapper but keep all the extra training info.",
+)
+parser.add_argument("--checkpoint", type=str, default=None, help="Continue the training from checkpoint.")
+parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
+parser.add_argument("--video_interval", type=int, default=15, help="Interval between video recordings (in episodes).")
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
-# parse the arguments
-args_cli = parser.parse_args()
+# parse known arguments and keep unknown arguments for hydra parsing
+args_cli, unknown_args = parser.parse_known_args()
+# always enable cameras to record video
+if args_cli.video:
+    # this is a setting provided by the AppLauncher
+    args_cli.enable_cameras = True
+
+# Set command line arguments to only contain unknown arguments (to the
+# ArgumentParser) to be parsed by hydra. This also avoids hydra trying to parse
+# arguments intended for the ArgumentParser.
+sys.argv = [sys.argv[0]] + unknown_args
 
 # launch omniverse app
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
-"""Rest everything follows."""
 
 import torch
-import isaaclab.sim as sim_utils
-from isaaclab.assets import ArticulationCfg, AssetBaseCfg
-from isaaclab.utils import configclass
-from isaaclab.managers import ObservationGroupCfg as ObsGroup
-from isaaclab.managers import ObservationTermCfg as ObsTerm
-from isaaclab.managers import RewardTermCfg as RewTerm
-from isaaclab.managers import TerminationTermCfg as DoneTerm
-from isaaclab.scene import InteractiveSceneCfg
+import gymnasium as gym
 
-import isaaclab.envs.mdp as mdp
-import isaac_labs_envs as envs
+import isaac_labs_envs
 from isaaclab.envs import ManagerBasedRLEnvCfg
-from isaaclab.envs import ManagerBasedRLEnv
+from isaaclab_tasks.utils import parse_env_cfg
+from isaaclab_tasks.utils.hydra import hydra_task_config
+from isaaclab_rl.sb3 import Sb3VecEnvWrapper, process_sb3_cfg
+from isaaclab.utils.io import dump_pickle, dump_yaml
+from isaaclab.utils.dict import print_dict
 
-from isaaclab.utils.math import subtract_frame_transforms
+from stable_baselines3 import PPO
+from stable_baselines3.common.callbacks import CheckpointCallback, LogEveryNTimesteps
 
-
-# pre-defined configs
-from isaaclab_assets import UNITREE_GO1_CFG
-
-
-@configclass
-class Go1SceneCfg(InteractiveSceneCfg):
-    # ground plane
-    ground = AssetBaseCfg(prim_path="/World/defaultGroundPlane", spawn=sim_utils.GroundPlaneCfg())
-    # lights
-    dome_light = AssetBaseCfg(prim_path="/World/Light", spawn=sim_utils.DomeLightCfg(intensity=3000.0, color=(0.75, 0.75, 0.75)))
-    # articulation
-    robot: ArticulationCfg = UNITREE_GO1_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+import contextlib
+from pathlib import Path
+from datetime import datetime
+import os
 
 
-@configclass
-class ActionsCfg:
-    joint_positions = mdp.JointPositionActionCfg(asset_name="robot", joint_names=[".*"], use_default_offset=True)
+def create_log_dir():
+    # directory for logging into
+    run_info = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    log_root_path = os.path.abspath(os.path.join("logs", "sb3", args_cli.task))
+    print(f"[INFO] Logging experiment in directory: {log_root_path}")
+    log_dir = os.path.join(log_root_path, run_info)
+    return log_dir
 
 
-@configclass
-class ObservationsCfg:
-    """Observation specifications for the environment."""
+def save_run_cfg(log_dir: str, env_cfg: ManagerBasedRLEnvCfg, agent_cfg: dict):
+    # dump the configuration into log-directory
+    dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
+    dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
+    dump_pickle(os.path.join(log_dir, "params", "env.pkl"), env_cfg)
+    dump_pickle(os.path.join(log_dir, "params", "agent.pkl"), agent_cfg)
 
-    @configclass
-    class PolicyCfg(ObsGroup):
-        """Observations for policy group."""
-
-        # observation terms (order preserved)
-
-        # joint positions and velocities relative to the default values
-        joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel)
-        joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel)
-
-        # gravity vector in the base frame
-        base_gravity = ObsTerm(func=mdp.projected_gravity)
-
-        # robot base height relative to world frame, expressed in the world frame
-        base_pos_z = ObsTerm(func=mdp.base_pos_z)
-
-        # linear velocity of the base expressed in the base frame
-        base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
-
-        # angular velocity of the base expressed in the base frame
-        base_ang_vel = ObsTerm(func=mdp.base_ang_vel)
-
-        # foot pose command
-        foot_pose_command = ObsTerm(func=mdp.generated_commands,
-                                    params={"command_name": "right_foot_pose"})
-
-        def __post_init__(self) -> None:
-            self.enable_corruption = False
-            self.concatenate_terms = True
-
-    # observation groups
-    policy: PolicyCfg = PolicyCfg()
+    # save command used to run the script
+    command = " ".join(sys.orig_argv)
+    (Path(log_dir) / "command.txt").write_text(command)
 
 
-# helper function for calculating the reward for foot tracking
-def track_foot_exp(env: ManagerBasedRLEnv,
-                   var: float,
-                   foot_body_name="FR_foot",
-                   command_name="right_foot_pose"):
-    assert(var >= 0.0)
-    # get foot target in base frame (Tbg)
-    pose_goal_b = env.command_manager.get_command(command_name)
-
-    # get foot body id/index
-    robot = env.scene["robot"]
-    body_ids, _ = robot.find_bodies(foot_body_name)
-    assert(len(body_ids)==1)
-    body_idx = body_ids[0]
-
-    # current foot pose in world frame (Twf)
-    pos_foot_w = robot.data.body_pos_w[:, body_idx]
-    quat_foot_w = robot.data.body_quat_w[:, body_idx]
-
-    # transform current foot pose into robot base frame
-    pose_base_w = robot.data.root_pose_w # Twb
-    # Tbf = Twb^{-1} Twf
-    pos_foot_b, quat_foot_b = subtract_frame_transforms(
-        pose_base_w[:,:3],
-        pose_base_w[:,3:],
-        pos_foot_w,
-        quat_foot_w,
-    )
-
-    # position error
-    pos_error = pos_foot_b - pose_goal_b[:,:3]
-
-    # calculate reward
-    return torch.exp(-torch.norm(pos_error, dim=1) / var)
+def post_process_cfg(log_dir, env_cfg, agent_cfg):
+    # override hydra configuration with ArgumentParser arguments
+    env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
+    env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
+    agent_cfg["device"] = args_cli.device if args_cli.device is not None else env_cfg.sim.device
+    # post-process agent configuration (convert value strings to types)
+    agent_cfg = process_sb3_cfg(agent_cfg, env_cfg.scene.num_envs)
+    # set the log directory for the environment (works for all environment types)
+    env_cfg.log_dir = log_dir
 
 
-@configclass
-class RewardsCfg:
-    foot_tracking = RewTerm(func=track_foot_exp, weight=1.0, params={"var": 0.6})
+@hydra_task_config(task_name=args_cli.task, agent_cfg_entry_point=args_cli.agent)
+def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: dict):
+    log_dir = create_log_dir()
+    
+    post_process_cfg(log_dir=log_dir, env_cfg=env_cfg, agent_cfg=agent_cfg)
 
+    save_run_cfg(log_dir=log_dir, env_cfg=env_cfg, agent_cfg=agent_cfg)
+    
+    # create environment using environment configuration
+    env = gym.make(args_cli.task, 
+                   cfg=env_cfg, 
+                   render_mode="rgb_array" if args_cli.video else None)
 
-@configclass
-class TerminationCfg:
-    time_out = DoneTerm(func=mdp.time_out, time_out=True)
+    # setup for video recording    
+    dur_p_ep = env_cfg.sim.dt * env_cfg.decimation
+    steps_p_ep = env_cfg.episode_length_s / dur_p_ep
+    ep_cnt = -1
+    def step_trigger_cb(steps):
+        # Convert steps to episode count. 'steps' is increment each time step()
+        # is called on the isaac env so 'steps' is the accumulate steps per
+        # environment.
+        nonlocal ep_cnt
+        episodes = steps // steps_p_ep
+        if episodes <= ep_cnt:
+            return False
+        ep_cnt = episodes
+        return episodes % args_cli.video_interval == 0
 
+    # record duration
+    vid_dur_ep = 2
+    vid_dur_steps = vid_dur_ep * steps_p_ep
 
-@configclass
-class CommandsCfg:
-    # Pose commands are generated in the environment frame and represented in
-    # the base frame of the robot
-    right_foot_pose = envs.UniformEnvPoseCommandCfg(
-        asset_name = "robot",
-        body_name = "FR_foot",
-        resampling_time_range = (5.0, 5.0),
-        debug_vis = True,
-        ranges = mdp.UniformPoseCommandCfg.Ranges(
-            pos_x = (0.4, 0.4),
-            pos_y = (-0.15, -0.15),
-            pos_z = (0.2, 0.2),
-            roll = (0.0, 0.0),
-            pitch = (0.0, 0.0),
-            yaw = (0.0, 0.0),
+    # Note that episode triggering cannot be used so step triggering is used
+    # instead. SB3 vectorized environments are expected to reset individual
+    # internal environments automatically, so a call to reset() on the SB3
+    # vectorized environment interface does not occur. Episodic video triggering
+    # depends on external calls to reset() the environment, and because this
+    # does not happen the episodic video trigger does not occur.
+    print("Video fps set to: {}".format(env.metadata["render_fps"]))
+    if args_cli.video:
+        video_kwargs = {
+            "video_folder": os.path.join(log_dir, "videos", "train"),
+            "step_trigger": step_trigger_cb,
+            "video_length": vid_dur_steps,
+            "disable_logger": True,
+        }
+        print("[INFO] Recording videos during training.")
+        print_dict(video_kwargs, nesting=4)
+        env = gym.wrappers.RecordVideo(env, **video_kwargs)
+
+    # wrap environment so that it can be used with stable baselines3
+    env = Sb3VecEnvWrapper(env, fast_variant=not args_cli.keep_all_info)
+
+    # create agent/policy using agent configuration
+    policy_arch = agent_cfg.pop("policy")
+    agent = PPO(policy_arch, env, tensorboard_log=log_dir, verbose=1, **agent_cfg)
+    if args_cli.checkpoint is not None:
+        print("Loading policy from checkpoint to continue training.")
+        agent = agent.load(args_cli.checkpoint, env, print_system_info=True)
+
+    # print info (this is vectorized environment)
+    print(f"[INFO]: Gym observation space: {env.observation_space}")
+    print(f"[INFO]: Gym action space: {env.action_space}")
+
+    # reset environment
+    env.reset()
+
+    # Set save frequency based on the number of policy updates (learning
+    # iterations).  Every environment is stepped this many times before saving.
+    scale = max(1000 // agent_cfg["n_steps"], 1)
+    save_freq_p_env = agent_cfg["n_steps"] * scale
+    checkpoint_cb = CheckpointCallback(save_freq=save_freq_p_env,
+                                       save_path=log_dir,
+                                       name_prefix="model",
+                                       save_vecnormalize=True,
+                                       save_replay_buffer=False,
+                                       verbose=2)
+    callbacks = [checkpoint_cb, 
+                 LogEveryNTimesteps(n_steps=args_cli.log_interval*env_cfg.scene.num_envs)]
+    
+    # train agent
+    print("Training...")
+    with contextlib.suppress(KeyboardInterrupt):
+        agent.learn(
+            total_timesteps=args_cli.env_steps*env_cfg.scene.num_envs,
+            callback=callbacks,
+            progress_bar=True,
+            log_interval=None,
         )
-    )
-    
-    
-@configclass
-class Go1EnvCfg(ManagerBasedRLEnvCfg):
-    # Scene settings
-    scene: Go1SceneCfg = Go1SceneCfg(num_envs=3, env_spacing=2.5)
-    # Basic settings
-    observations: ObservationsCfg = ObservationsCfg()
-    actions: ActionsCfg = ActionsCfg()
-    # leave events to reset to default state (don't set 'events')
-    rewards: RewardsCfg = RewardsCfg()
-    terminations: TerminationCfg = TerminationCfg()
-    commands: CommandsCfg = CommandsCfg()
 
-    def __post_init__(self):
-        """Post initialization."""
-        # viewer settings
-        self.viewer.eye = [4.5, 0.0, 6.0]
-        self.viewer.lookat = [0.0, 0.0, 2.0]
-        # step settings
-        self.decimation = 4  # env step every 4 sim steps: 200Hz / 4 = 50Hz
-        self.episode_length_s = 5
-        # simulation settings
-        self.sim.dt = 0.005  # sim step every 5ms: 200Hz
-
-
-def main():
-    # create environment configuration
-    env_cfg = Go1EnvCfg()
-    env_cfg.scene.num_envs = args_cli.num_envs
-    env_cfg.sim.device = args_cli.device
-    # setup RL environment
-    env = ManagerBasedRLEnv(cfg=env_cfg)
-
-    # simulate physics
-    count = 0
-    while simulation_app.is_running():
-        with torch.inference_mode():
-            # sample random actions
-            joint_positions = torch.randn_like(env.action_manager.action)
-            # step the environment
-            obs, rew, terminated, truncated, info = env.step(joint_positions)
+    # save the final model
+    print("Trainging complete. Saving model.")
+    agent.save(os.path.join(log_dir, "model"))
 
     # close the environment
     env.close()
