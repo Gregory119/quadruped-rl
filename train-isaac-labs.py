@@ -31,11 +31,17 @@ parser.add_argument(
     help="Use a slower SB3 wrapper but keep all the extra training info.",
 )
 parser.add_argument("--checkpoint", type=str, default=None, help="Continue the training from checkpoint.")
+parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
+parser.add_argument("--video_interval", type=int, default=15, help="Interval between video recordings (in episodes).")
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse known arguments and keep unknown arguments for hydra parsing
 args_cli, unknown_args = parser.parse_known_args()
+# always enable cameras to record video
+if args_cli.video:
+    # this is a setting provided by the AppLauncher
+    args_cli.enable_cameras = True
 
 # Set command line arguments to only contain unknown arguments (to the
 # ArgumentParser) to be parsed by hydra. This also avoids hydra trying to parse
@@ -56,6 +62,7 @@ from isaaclab_tasks.utils import parse_env_cfg
 from isaaclab_tasks.utils.hydra import hydra_task_config
 from isaaclab_rl.sb3 import Sb3VecEnvWrapper, process_sb3_cfg
 from isaaclab.utils.io import dump_pickle, dump_yaml
+from isaaclab.utils.dict import print_dict
 
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CheckpointCallback, LogEveryNTimesteps
@@ -98,13 +105,6 @@ def post_process_cfg(log_dir, env_cfg, agent_cfg):
     env_cfg.log_dir = log_dir
 
 
-# todo:
-# - video recording
-# - normalization
-# - create agent from command line checkpoint
-# - sb3 callbacks: save checkpoints
-
-
 @hydra_task_config(task_name=args_cli.task, agent_cfg_entry_point=args_cli.agent)
 def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: dict):
     log_dir = create_log_dir()
@@ -114,7 +114,46 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: dict):
     save_run_cfg(log_dir=log_dir, env_cfg=env_cfg, agent_cfg=agent_cfg)
     
     # create environment using environment configuration
-    env = gym.make(args_cli.task, cfg=env_cfg)
+    env = gym.make(args_cli.task, 
+                   cfg=env_cfg, 
+                   render_mode="rgb_array" if args_cli.video else None)
+
+    # setup for video recording    
+    dur_p_ep = env_cfg.sim.dt * env_cfg.decimation
+    steps_p_ep = env_cfg.episode_length_s / dur_p_ep
+    ep_cnt = -1
+    def step_trigger_cb(steps):
+        # Convert steps to episode count. 'steps' is increment each time step()
+        # is called on the isaac env so 'steps' is the accumulate steps per
+        # environment.
+        nonlocal ep_cnt
+        episodes = steps // steps_p_ep
+        if episodes <= ep_cnt:
+            return False
+        ep_cnt = episodes
+        return episodes % args_cli.video_interval == 0
+
+    # record duration
+    vid_dur_ep = 2
+    vid_dur_steps = vid_dur_ep * steps_p_ep
+
+    # Note that episode triggering cannot be used so step triggering is used
+    # instead. SB3 vectorized environments are expected to reset individual
+    # internal environments automatically, so a call to reset() on the SB3
+    # vectorized environment interface does not occur. Episodic video triggering
+    # depends on external calls to reset() the environment, and because this
+    # does not happen the episodic video trigger does not occur.
+    print("Video fps set to: {}".format(env.metadata["render_fps"]))
+    if args_cli.video:
+        video_kwargs = {
+            "video_folder": os.path.join(log_dir, "videos", "train"),
+            "step_trigger": step_trigger_cb,
+            "video_length": vid_dur_steps,
+            "disable_logger": True,
+        }
+        print("[INFO] Recording videos during training.")
+        print_dict(video_kwargs, nesting=4)
+        env = gym.wrappers.RecordVideo(env, **video_kwargs)
 
     # wrap environment so that it can be used with stable baselines3
     env = Sb3VecEnvWrapper(env, fast_variant=not args_cli.keep_all_info)
@@ -159,7 +198,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: dict):
     # save the final model
     print("Trainging complete. Saving model.")
     agent.save(os.path.join(log_dir, "model"))
-        
+
     # close the environment
     env.close()
 
