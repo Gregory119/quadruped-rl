@@ -30,6 +30,7 @@ parser.add_argument(
     default=False,
     help="Use a slower SB3 wrapper but keep all the extra training info.",
 )
+parser.add_argument("--checkpoint", type=str, default=None, help="Continue the training from checkpoint.")
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -121,6 +122,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: dict):
     # create agent/policy using agent configuration
     policy_arch = agent_cfg.pop("policy")
     agent = PPO(policy_arch, env, tensorboard_log=log_dir, verbose=1, **agent_cfg)
+    if args_cli.checkpoint is not None:
+        print("Loading policy from checkpoint to continue training.")
+        agent = agent.load(args_cli.checkpoint, env, print_system_info=True)
 
     # print info (this is vectorized environment)
     print(f"[INFO]: Gym observation space: {env.observation_space}")
@@ -129,7 +133,18 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: dict):
     # reset environment
     env.reset()
 
-    callbacks = [LogEveryNTimesteps(n_steps=args_cli.log_interval*env_cfg.scene.num_envs)]
+    # Set save frequency based on the number of policy updates (learning
+    # iterations).  Every environment is stepped this many times before saving.
+    scale = max(1000 // agent_cfg["n_steps"], 1)
+    save_freq_p_env = agent_cfg["n_steps"] * scale
+    checkpoint_cb = CheckpointCallback(save_freq=save_freq_p_env,
+                                       save_path=log_dir,
+                                       name_prefix="model",
+                                       save_vecnormalize=True,
+                                       save_replay_buffer=False,
+                                       verbose=2)
+    callbacks = [checkpoint_cb, 
+                 LogEveryNTimesteps(n_steps=args_cli.log_interval*env_cfg.scene.num_envs)]
     
     # train agent
     print("Training...")
