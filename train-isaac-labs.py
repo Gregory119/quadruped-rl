@@ -66,6 +66,7 @@ from isaaclab.utils.dict import print_dict
 
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CheckpointCallback, LogEveryNTimesteps
+from rl_utils.sb3.log_episode_reward import LogMeanEpisodeRewardCallback
 
 import contextlib
 from pathlib import Path
@@ -183,7 +184,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: dict):
                                        save_replay_buffer=False,
                                        verbose=2)
     callbacks = [checkpoint_cb, 
-                 LogEveryNTimesteps(n_steps=args_cli.log_interval*env_cfg.scene.num_envs)]
+                 LogEveryNTimesteps(n_steps=args_cli.log_interval*env_cfg.scene.num_envs),
+                 LogMeanEpisodeRewardCallback()]
     
     # train agent
     print("Training...")
