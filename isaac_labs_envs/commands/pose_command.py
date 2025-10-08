@@ -56,10 +56,18 @@ class UniformEnvPoseCommand(CommandTerm):
 
         # create buffers
         # -- commands: (x, y, z, qw, qx, qy, qz) in root frame
+        # pose command in the base frame
         self.pose_command_b = torch.zeros(self.num_envs, 7, device=self.device)
         self.pose_command_b[:, 3] = 1.0 # set qw=1
+        # pose command in the environment frame
         self.pose_command_e = torch.zeros_like(self.pose_command_b)
+        # pose command in the world frame
         self.pose_command_w = torch.zeros_like(self.pose_command_b)
+        # Tensor of (4,4) homogeneous transformations representing the
+        # environment frame w.r.t the world frame
+        self.Twe = torch.zeros(self.num_envs, 4, 4, device=self.device)
+        self.Twe[:, :4, :4] = torch.eye(4) # same orientation as world
+        self.Twe[:, :3, 3] = self._env.scene.env_origins[:] # shape=(num_envs, 3)
         # -- metrics
         self.metrics["position_error"] = torch.zeros(self.num_envs, device=self.device)
         self.metrics["orientation_error"] = torch.zeros(self.num_envs, device=self.device)
@@ -98,7 +106,7 @@ class UniformEnvPoseCommand(CommandTerm):
         self.metrics["orientation_error"] = torch.norm(rot_error, dim=-1)
 
     def _resample_command(self, env_ids: Sequence[int]):
-        # sample new pose targets in the world frame
+        # sample new pose targets in the environment frame
         # -- position
         r = torch.empty(len(env_ids), device=self.device)
         self.pose_command_e[env_ids, 0] = r.uniform_(*self.cfg.ranges.pos_x)
@@ -125,39 +133,34 @@ class UniformEnvPoseCommand(CommandTerm):
             self.pose_command_e[env_ids, :3],
             self.pose_command_e[env_ids, 3:]
         )
-        
+
+    def _update_command(self):
+        # The base frame has likely moved with respect to the environment frame
+        # so recalculate the command in the base frame.
+
         # transform command from environment origin frame into base frame
         # Tbc = Tbe * Tec
         # where
         # Tbc: command in base frame
         # Tbe: environment frame w.r.t base frame
         # Tec: command in environment frame
-
-        # find Twe (environment frame w.r.t world frame with the same orientation)
-        Twe = torch.zeros(len(env_ids), 4, 4, device=self.device)
-        Twe[:, :4, :4] = torch.eye(4) # same orientation as world
-        Twe[:, :3, 3] = self._env.scene.env_origins[env_ids] # shape=(num_envs, 3)
         
         # find Twb
-        pose_wb = self.robot.data.root_pose_w[env_ids] # [[pos, quat]], shape=(num_envs, 7)
+        pose_wb = self.robot.data.root_pose_w # [[pos, quat]], shape=(num_envs, 7)
         R_wb = matrix_from_quat(pose_wb[:,3:])
         Twb = make_pose(pos=pose_wb[:,:3], rot=R_wb) # shape=(num_envs, (4,4))
         
         # find Tbe = (Twb)^{-1} Twe
-        Tbe = torch.matmul(pose_inv(Twb), Twe) # shape=(num_envs, (4,4))
+        Tbe = torch.matmul(pose_inv(Twb), self.Twe) # shape=(num_envs, (4,4))
         pos_be, R_be = unmake_pose(Tbe)
         quat_be = quat_from_matrix(R_be)
         # find Tbc
-        self.pose_command_b[env_ids, :3], self.pose_command_b[env_ids, 3:] = combine_frame_transforms(
+        self.pose_command_b[:, :3], self.pose_command_b[:, 3:] = combine_frame_transforms(
             pos_be,
             quat_be,
-            self.pose_command_e[env_ids, :3],
-            self.pose_command_e[env_ids, 3:],
+            self.pose_command_e[:, :3],
+            self.pose_command_e[:, 3:],
         )
-        
-
-    def _update_command(self):
-        pass
 
     def _set_debug_vis_impl(self, debug_vis: bool):
         # create markers if necessary for the first time
