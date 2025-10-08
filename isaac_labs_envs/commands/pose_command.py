@@ -151,8 +151,8 @@ class UniformEnvPoseCommand(CommandTerm):
         self.pose_command_b[env_ids, :3], self.pose_command_b[env_ids, 3:] = combine_frame_transforms(
             pos_be,
             quat_be,
-            self.pose_command_e[:, :3],
-            self.pose_command_e[:, 3:],
+            self.pose_command_e[env_ids, :3],
+            self.pose_command_e[env_ids, 3:],
         )
         
 

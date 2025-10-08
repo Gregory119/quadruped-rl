@@ -5,6 +5,7 @@ Environment configuration for the Go1 robot to reach a target point with one of 
 from __future__ import annotations
 
 import torch
+import math
 import isaaclab.sim as sim_utils
 import isaac_labs_envs as envs
 import isaaclab.envs.mdp as mdp
@@ -126,6 +127,7 @@ class RewardsCfg:
 @configclass
 class TerminationCfg:
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
+    fall = DoneTerm(func=mdp.bad_orientation, params={"limit_angle": math.pi/2})
 
 
 @configclass
