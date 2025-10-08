@@ -23,7 +23,7 @@ parser.add_argument("--log_interval", type=int, default=100, help="Number of tim
 parser.add_argument(
     "--agent", type=str, default="sb3_cfg_entry_point", help="Name of the RL agent configuration entry point."
 )
-parser.add_argument("--env_steps", type=int, default=100000, help="Number of steps per environment instance.")
+parser.add_argument("--env_steps", type=int, default=50000, help="Number of steps per environment instance.")
 parser.add_argument(
     "--keep_all_info",
     action="store_true",
@@ -87,8 +87,8 @@ def save_run_cfg(log_dir: str, env_cfg: ManagerBasedRLEnvCfg, agent_cfg: dict):
     # dump the configuration into log-directory
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
     dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
-    dump_pickle(os.path.join(log_dir, "params", "env.pkl"), env_cfg)
-    dump_pickle(os.path.join(log_dir, "params", "agent.pkl"), agent_cfg)
+    # dump_pickle(os.path.join(log_dir, "params", "env.pkl"), env_cfg)
+    # dump_pickle(os.path.join(log_dir, "params", "agent.pkl"), agent_cfg)
 
     # save command used to run the script
     command = " ".join(sys.orig_argv)
@@ -160,6 +160,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: dict):
     env = Sb3VecEnvWrapper(env, fast_variant=not args_cli.keep_all_info)
 
     # create agent/policy using agent configuration
+    minibatch_size_p_env = agent_cfg.pop("minibatch_size_p_env")
+    # sb3 PPO uses batch_size as the mini-batch size over all environments (not
+    # per environment)
+    agent_cfg["batch_size"] = minibatch_size_p_env * env_cfg.scene.num_envs
     policy_arch = agent_cfg.pop("policy")
     agent = PPO(policy_arch, env, tensorboard_log=log_dir, verbose=1, **agent_cfg)
     if args_cli.checkpoint is not None:
