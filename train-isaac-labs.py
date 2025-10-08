@@ -170,9 +170,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: dict):
     print(f"[INFO]: Gym observation space: {env.observation_space}")
     print(f"[INFO]: Gym action space: {env.action_space}")
 
-    # reset environment
-    env.reset()
-
     # Set save frequency based on the number of policy updates (learning
     # iterations).  Every environment is stepped this many times before saving.
     scale = max(1000 // agent_cfg["n_steps"], 1)
@@ -184,9 +181,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: dict):
                                        save_replay_buffer=False,
                                        verbose=2)
     callbacks = [checkpoint_cb, 
-                 LogEveryNTimesteps(n_steps=args_cli.log_interval*env_cfg.scene.num_envs),
-                 LogMeanEpisodeRewardCallback()]
+                 LogEveryNTimesteps(n_steps=args_cli.log_interval*env_cfg.scene.num_envs)]
     
+    # reset environment
+    env.reset()
+
     # train agent
     print("Training...")
     with contextlib.suppress(KeyboardInterrupt):
