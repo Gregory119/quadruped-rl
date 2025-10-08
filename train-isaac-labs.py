@@ -17,13 +17,13 @@ parser = argparse.ArgumentParser(description="Test RL environment for Go1.")
 parser.add_argument(
     "--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations."
 )
-parser.add_argument("--num_envs", type=int, default=3, help="Number of environments to spawn.")
+parser.add_argument("--num_envs", type=int, default=4096, help="Number of environments to spawn.")
 parser.add_argument("--task", type=str, default=None, help="Name of task/environment")
 parser.add_argument("--log_interval", type=int, default=100, help="Number of timesteps per environment to log data.")
 parser.add_argument(
     "--agent", type=str, default="sb3_cfg_entry_point", help="Name of the RL agent configuration entry point."
 )
-parser.add_argument("--env_steps", type=int, default=100000, help="Number of steps per environment instance.")
+parser.add_argument("--env_steps", type=int, default=50000, help="Number of steps per environment instance.")
 parser.add_argument(
     "--keep_all_info",
     action="store_true",
@@ -87,8 +87,8 @@ def save_run_cfg(log_dir: str, env_cfg: ManagerBasedRLEnvCfg, agent_cfg: dict):
     # dump the configuration into log-directory
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
     dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
-    dump_pickle(os.path.join(log_dir, "params", "env.pkl"), env_cfg)
-    dump_pickle(os.path.join(log_dir, "params", "agent.pkl"), agent_cfg)
+    # dump_pickle(os.path.join(log_dir, "params", "env.pkl"), env_cfg)
+    # dump_pickle(os.path.join(log_dir, "params", "agent.pkl"), agent_cfg)
 
     # save command used to run the script
     command = " ".join(sys.orig_argv)
@@ -102,6 +102,7 @@ def post_process_cfg(log_dir, env_cfg, agent_cfg):
     agent_cfg["device"] = args_cli.device if args_cli.device is not None else env_cfg.sim.device
     # post-process agent configuration (convert value strings to types)
     agent_cfg = process_sb3_cfg(agent_cfg, env_cfg.scene.num_envs)
+    env_cfg.seed = agent_cfg["seed"]
     # set the log directory for the environment (works for all environment types)
     env_cfg.log_dir = log_dir
 
@@ -160,6 +161,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: dict):
     env = Sb3VecEnvWrapper(env, fast_variant=not args_cli.keep_all_info)
 
     # create agent/policy using agent configuration
+    minibatch_size_p_env = agent_cfg.pop("minibatch_size_p_env")
+    # sb3 PPO uses batch_size as the mini-batch size over all environments (not
+    # per environment)
+    agent_cfg["batch_size"] = minibatch_size_p_env * env_cfg.scene.num_envs
     policy_arch = agent_cfg.pop("policy")
     agent = PPO(policy_arch, env, tensorboard_log=log_dir, verbose=1, **agent_cfg)
     if args_cli.checkpoint is not None:
@@ -169,9 +174,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: dict):
     # print info (this is vectorized environment)
     print(f"[INFO]: Gym observation space: {env.observation_space}")
     print(f"[INFO]: Gym action space: {env.action_space}")
-
-    # reset environment
-    env.reset()
 
     # Set save frequency based on the number of policy updates (learning
     # iterations).  Every environment is stepped this many times before saving.
@@ -184,9 +186,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: dict):
                                        save_replay_buffer=False,
                                        verbose=2)
     callbacks = [checkpoint_cb, 
-                 LogEveryNTimesteps(n_steps=args_cli.log_interval*env_cfg.scene.num_envs),
-                 LogMeanEpisodeRewardCallback()]
+                 LogEveryNTimesteps(n_steps=args_cli.log_interval*env_cfg.scene.num_envs)]
     
+    # reset environment
+    env.reset()
+
     # train agent
     print("Training...")
     with contextlib.suppress(KeyboardInterrupt):
