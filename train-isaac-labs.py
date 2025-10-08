@@ -23,7 +23,7 @@ parser.add_argument("--log_interval", type=int, default=100, help="Number of tim
 parser.add_argument(
     "--agent", type=str, default="sb3_cfg_entry_point", help="Name of the RL agent configuration entry point."
 )
-parser.add_argument("--env_steps", type=int, default=50000, help="Number of steps per environment instance.")
+parser.add_argument("--env_steps", type=int, default=30000, help="Number of steps per environment instance.")
 parser.add_argument(
     "--keep_all_info",
     action="store_true",
