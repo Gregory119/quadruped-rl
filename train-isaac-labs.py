@@ -17,7 +17,7 @@ parser = argparse.ArgumentParser(description="Test RL environment for Go1.")
 parser.add_argument(
     "--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations."
 )
-parser.add_argument("--num_envs", type=int, default=3, help="Number of environments to spawn.")
+parser.add_argument("--num_envs", type=int, default=4096, help="Number of environments to spawn.")
 parser.add_argument("--task", type=str, default=None, help="Name of task/environment")
 parser.add_argument("--log_interval", type=int, default=100, help="Number of timesteps per environment to log data.")
 parser.add_argument(
