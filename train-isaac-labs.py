@@ -102,6 +102,7 @@ def post_process_cfg(log_dir, env_cfg, agent_cfg):
     agent_cfg["device"] = args_cli.device if args_cli.device is not None else env_cfg.sim.device
     # post-process agent configuration (convert value strings to types)
     agent_cfg = process_sb3_cfg(agent_cfg, env_cfg.scene.num_envs)
+    env_cfg.seed = agent_cfg["seed"]
     # set the log directory for the environment (works for all environment types)
     env_cfg.log_dir = log_dir
 

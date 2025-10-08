@@ -1,7 +1,7 @@
 # parameters selected based on "Learning to Walk in Minutes Using Massively
 # Parallel Deep Reinforcement Learning"
 
-# seed: 42
+seed: 42
 
 policy: 'MlpPolicy'
 # Number of steps per environment per policy update/iteration. This is like the
