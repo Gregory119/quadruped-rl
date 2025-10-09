@@ -16,8 +16,9 @@ from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import TerminationTermCfg as DoneTerm
+from isaaclab.managers import SceneEntityCfg
 from isaaclab.scene import InteractiveSceneCfg
-
+from isaaclab.sensors import ContactSensorCfg
 
 from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.utils.math import subtract_frame_transforms
@@ -38,6 +39,9 @@ class Go1SceneCfg(InteractiveSceneCfg):
     dome_light = AssetBaseCfg(prim_path="/World/Light", spawn=sim_utils.DomeLightCfg(intensity=3000.0, color=(0.75, 0.75, 0.75)))
     # articulation
     robot: ArticulationCfg = UNITREE_GO1_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+    # sensors
+    contact_sensors = ContactSensorCfg(prim_path="{ENV_REGEX_NS}/Robot/.*",
+                                       history_length=4) # same as env decimation
 
 
 @configclass
@@ -128,6 +132,11 @@ class RewardsCfg:
 class TerminationCfg:
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
     fall = DoneTerm(func=mdp.bad_orientation, params={"limit_angle": math.pi/2})
+    collision_base = DoneTerm(
+        func=mdp.terminations.illegal_contact,
+        params={'threshold': 1.0,
+                'sensor_cfg': SceneEntityCfg("contact_sensors", body_names="trunk"),
+                'threshold': 1.0})
 
 
 @configclass
