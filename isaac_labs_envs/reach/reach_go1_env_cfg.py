@@ -187,3 +187,9 @@ class ReachGo1EnvCfg(ManagerBasedRLEnvCfg):
         self.episode_length_s = 5
         # simulation settings
         self.sim.dt = 0.005  # sim step every 5ms: 200Hz
+
+        # By default the render interval is 1, which means rendering will occur
+        # at every simulation step. However, video recording expects an FPS the
+        # same as the action step rate. This means that rendering is running
+        # faster than necessary, so set it to match the expected FPS.
+        self.sim.render_interval = self.decimation
