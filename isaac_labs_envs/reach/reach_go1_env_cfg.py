@@ -126,6 +126,12 @@ def track_foot_exp(env: ManagerBasedRLEnv,
 @configclass
 class RewardsCfg:
     foot_tracking = RewTerm(func=track_foot_exp, weight=1.0, params={"var": 0.6})
+    collisions = RewTerm(
+        func=mdp.undesired_contacts,
+        weight=-0.1,
+        params={"threshold": 1.0,
+                "sensor_cfg": SceneEntityCfg("contact_sensors",
+                                             body_names=[".*_hip", ".*_thigh", ".*_calf", "trunk"])})
 
 
 @configclass
@@ -133,7 +139,7 @@ class TerminationCfg:
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
     fall = DoneTerm(func=mdp.bad_orientation, params={"limit_angle": math.pi/2})
     collision_base = DoneTerm(
-        func=mdp.terminations.illegal_contact,
+        func=mdp.illegal_contact,
         params={'threshold': 1.0,
                 'sensor_cfg': SceneEntityCfg("contact_sensors", body_names="trunk"),
                 'threshold': 1.0})
