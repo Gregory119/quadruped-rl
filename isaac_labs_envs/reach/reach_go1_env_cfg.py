@@ -131,6 +131,11 @@ class RewardsCfg:
         params={"threshold": 0.1,
                 "sensor_cfg": SceneEntityCfg("contact_sensors",
                                              body_names=[".*_hip", ".*_thigh", ".*_calf", "trunk"])})
+    
+    # todo:
+    # - reward for trunk height command (x and y targets are zero)
+    # - reward for trunk planar xy orientation pointing along the environment x direction
+    # - reward for foot tracking activates once trunk pose is within tolerance
 
 
 @configclass
@@ -158,6 +163,14 @@ class CommandsCfg:
             pos_y = (-0.15, -0.15),
             pos_z = (0.2, 0.2),
         )
+    )
+    
+    height = envs.UniformHeightCommandCfg(
+        asset_name = "robot",
+        body_name = "trunk",
+        resampling_time_range = (5.0, 5.0),
+        debug_vis = True,
+        ranges = mdp.Uniform
     )
     
     
