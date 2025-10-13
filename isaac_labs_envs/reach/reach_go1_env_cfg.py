@@ -128,7 +128,7 @@ class RewardsCfg:
     collisions = RewTerm(
         func=mdp.undesired_contacts,
         weight=-0.1,
-        params={"threshold": 1.0,
+        params={"threshold": 0.1,
                 "sensor_cfg": SceneEntityCfg("contact_sensors",
                                              body_names=[".*_hip", ".*_thigh", ".*_calf", "trunk"])})
 
@@ -139,7 +139,7 @@ class TerminationCfg:
     fall = DoneTerm(func=mdp.bad_orientation, params={"limit_angle": math.pi/2})
     collision_base = DoneTerm(
         func=mdp.illegal_contact,
-        params={'threshold': 1.0,
+        params={'threshold': 0.1,
                 'sensor_cfg': SceneEntityCfg("contact_sensors", body_names="trunk"),
                 'threshold': 1.0})
 
