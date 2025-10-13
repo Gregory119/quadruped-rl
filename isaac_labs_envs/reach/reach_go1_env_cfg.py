@@ -75,9 +75,9 @@ class ObservationsCfg:
         # angular velocity of the base expressed in the base frame
         base_ang_vel = ObsTerm(func=mdp.base_ang_vel)
 
-        # foot pose command
-        foot_pose_command = ObsTerm(func=mdp.generated_commands,
-                                    params={"command_name": "right_foot_pose"})
+        # foot pos command
+        foot_pos_command = ObsTerm(func=mdp.generated_commands,
+                                   params={"command_name": "right_foot_pos"})
 
         def __post_init__(self) -> None:
             self.enable_corruption = False
@@ -91,10 +91,10 @@ class ObservationsCfg:
 def track_foot_exp(env: ManagerBasedRLEnv,
                    var: float,
                    foot_body_name="FR_foot",
-                   command_name="right_foot_pose"):
+                   command_name="right_foot_pos"):
     assert(var >= 0.0)
     # get foot target in base frame (Tbg)
-    pose_goal_b = env.command_manager.get_command(command_name)
+    pos_goal_b = env.command_manager.get_command(command_name)
 
     # get foot body id/index
     robot = env.scene["robot"]
@@ -102,22 +102,21 @@ def track_foot_exp(env: ManagerBasedRLEnv,
     assert(len(body_ids)==1)
     body_idx = body_ids[0]
 
-    # current foot pose in world frame (Twf)
+    # current foot pos in world frame (Twf)
     pos_foot_w = robot.data.body_pos_w[:, body_idx]
-    quat_foot_w = robot.data.body_quat_w[:, body_idx]
 
-    # transform current foot pose into robot base frame
+    # transform current foot pos into robot base frame
     pose_base_w = robot.data.root_pose_w # Twb
-    # Tbf = Twb^{-1} Twf
-    pos_foot_b, quat_foot_b = subtract_frame_transforms(
+    # p_bf = Rwb^{-1} p_wf + p_bw
+    pos_foot_b, _ = subtract_frame_transforms(
         pose_base_w[:,:3],
         pose_base_w[:,3:],
         pos_foot_w,
-        quat_foot_w,
+        None,
     )
 
     # position error
-    pos_error = pos_foot_b - pose_goal_b[:,:3]
+    pos_error = pos_foot_b - pos_goal_b
 
     # calculate reward
     return torch.exp(-torch.norm(pos_error, dim=1) / var)
@@ -147,20 +146,17 @@ class TerminationCfg:
 
 @configclass
 class CommandsCfg:
-    # Pose commands are generated in the environment frame and represented in
-    # the base frame of the robot
-    right_foot_pose = envs.UniformEnvPoseCommandCfg(
+    # Position commands are generated in the environment frame and represented
+    # in the base frame of the robot
+    right_foot_pos = envs.UniformEnvPosCommandCfg(
         asset_name = "robot",
         body_name = "FR_foot",
         resampling_time_range = (5.0, 5.0),
         debug_vis = True,
-        ranges = mdp.UniformPoseCommandCfg.Ranges(
+        ranges = envs.UniformEnvPosCommandCfg.Ranges(
             pos_x = (0.4, 0.4),
             pos_y = (-0.15, -0.15),
             pos_z = (0.2, 0.2),
-            roll = (0.0, 0.0),
-            pitch = (0.0, 0.0),
-            yaw = (0.0, 0.0),
         )
     )
     

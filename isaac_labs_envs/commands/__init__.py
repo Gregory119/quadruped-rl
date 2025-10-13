@@ -1,2 +1,2 @@
-from .commands_cfg import UniformEnvPoseCommandCfg
-from .pose_command import UniformEnvPoseCommand
+from .commands_cfg import UniformEnvPosCommandCfg
+from .pose_command import UniformEnvPosCommand
