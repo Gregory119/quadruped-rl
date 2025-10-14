@@ -112,7 +112,10 @@ class ObservationsCfg:
         base_gravity = ObsTerm(func=mdp.projected_gravity)
 
         # robot base height relative to world frame, expressed in the world frame
-        base_pos_z = ObsTerm(func=mdp.base_pos_z)
+        #base_pos_z = ObsTerm(func=mdp.base_pos_z)
+
+        # robot base pose in the environment frame
+        base_pose = ObsTerm(func=mdp.body_pose_w)
 
         # linear velocity of the base expressed in the base frame
         base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
@@ -123,6 +126,10 @@ class ObservationsCfg:
         # foot pos command
         foot_pos_command = ObsTerm(func=mdp.generated_commands,
                                    params={"command_name": "right_foot_pos"})
+
+        # base/trunk height command
+        base_height_command = ObsTerm(func=mdp.generated_commands,
+                                      params={"command_name": "height"})
 
         def __post_init__(self) -> None:
             self.enable_corruption = False
@@ -167,15 +174,42 @@ def track_foot_exp(env: ManagerBasedRLEnv,
     return torch.exp(-torch.norm(pos_error, dim=1) / var)
 
 
+def track_height_exp(env: ManagerBasedRLEnv,
+                     var: float,
+                     body_name="trunk",
+                     command_name="height") -> torch.Tensor:
+    assert(var >= 0.0)
+    # get height goal in environment frames
+    height_cmd = env.command_manager.get_command(command_name)
+    height_goal = torch.zeros((len(height_cmd), 3), device=env.device)
+    height_goal[:,2] = height_cmd
+
+    # get body id/index
+    robot = env.scene["robot"]
+    body_ids, _ = robot.find_bodies(body_name)
+    assert(len(body_ids)==1)
+    body_idx = body_ids[0]
+
+    # current height in world/environment frames
+    height = robot.data.body_pos_w[:, body_idx]
+
+    # error
+    error = height_goal - height
+
+    # calculate reward
+    return torch.exp(-torch.norm(error, dim=1) / var)
+
+
 @configclass
 class RewardsCfg:
-    foot_tracking = RewTerm(func=track_foot_exp, weight=1.0, params={"var": 0.6})
+    foot_tracking = RewTerm(func=track_foot_exp, weight=0.5, params={"var": 0.6})
     collisions = RewTerm(
         func=mdp.undesired_contacts,
         weight=-0.1,
         params={"threshold": 0.1,
                 "sensor_cfg": SceneEntityCfg("contact_sensors",
                                              body_names=[".*_hip", ".*_thigh", ".*_calf", "trunk"])})
+    height_tracking = RewTerm(func=track_foot_exp, weight=0.5, params={"var": 0.3})
     
     # todo:
     # - reward for trunk height command (x and y targets are zero)
@@ -184,10 +218,15 @@ class RewardsCfg:
 
 
 def illegal_contact_filtered(env: ManagerBasedRLEnv, threshold: float, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
-    """Terminate when the body filtered contact force on the sensor exceeds the force threshold."""
+    """Terminate when the contact force between the sensor and filtered body
+    names exceeds the force threshold.
+
+    """
     # extract the used quantities (to enable type-hinting)
     contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
-    # shape of force matrix w history: (num_envs, history_length, num_bodies, num_filters, 3)
+    # Extract the force matrix only available for filtered body names. Shape of
+    # force matrix w history: (num_envs, history_length, num_bodies,
+    # num_filters, 3)
     forces = contact_sensor.data.force_matrix_w_history[:, :, sensor_cfg.body_ids]
     shape = forces.shape
     assert len(shape) == 5
@@ -233,14 +272,14 @@ class CommandsCfg:
             pos_z = (0.2, 0.2),
         )
     )
-    
-    # height = envs.UniformHeightCommandCfg(
-    #     asset_name = "robot",
-    #     body_name = "trunk",
-    #     resampling_time_range = (5.0, 5.0),
-    #     debug_vis = True,
-    #     ranges = mdp.Uniform
-    # )
+
+    height = envs.UniformHeightCommandCfg(
+        asset_name = "robot",
+        body_name = "trunk",
+        resampling_time_range = (5.0, 5.0),
+        debug_vis = True,
+        range_height = (0.3, 0.3),
+    )
     
     
 @configclass
