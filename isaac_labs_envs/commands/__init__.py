@@ -1,2 +1,3 @@
-from .commands_cfg import UniformEnvPosCommandCfg
+from .commands_cfg import UniformEnvPosCommandCfg, UniformHeightCommandCfg
 from .pose_command import UniformEnvPosCommand
+from .height_command import UniformHeightCommand
