@@ -10,7 +10,7 @@ import isaaclab.sim as sim_utils
 import isaac_labs_envs as envs
 import isaaclab.envs.mdp as mdp
 
-from isaaclab.assets import ArticulationCfg, AssetBaseCfg
+from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
 from isaaclab.utils import configclass
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
@@ -39,10 +39,55 @@ class Go1SceneCfg(InteractiveSceneCfg):
     dome_light = AssetBaseCfg(prim_path="/World/Light", spawn=sim_utils.DomeLightCfg(intensity=3000.0, color=(0.75, 0.75, 0.75)))
     # articulation
     robot: ArticulationCfg = UNITREE_GO1_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+
+    ground_pad = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/ground_pad",
+        spawn=sim_utils.CuboidCfg(
+            size=(5, 5, 0.001),
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
+            mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
+            collision_props=sim_utils.CollisionPropertiesCfg(),
+            activate_contact_sensors=True,
+            physics_material=sim_utils.RigidBodyMaterialCfg(static_friction=1.0),
+        ),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(0., 0., 0.)),
+    )    
+    
     # sensors
     contact_sensors = ContactSensorCfg(prim_path="{ENV_REGEX_NS}/Robot/.*",
+                                       debug_vis=True,
                                        history_length=4) # same as env decimation
 
+    # As described here
+    # https://isaac-sim.github.io/IsaacLab/main/source/api/lab/isaaclab.sensors.html#isaaclab.sensors.ContactSensor,
+    # a contact sensor can use filter_prim_paths_expr to filter against names of
+    # bodies of interest that the sensor makes contact with. This body name
+    # filtered data can only be accessed through
+    # contact_sensor.data.force_matrix*. It only supports a contact sensor
+    # containing one body which can come into contact with many environment
+    # bodies. Instead of creating one sensor per robot part, it is simpler to
+    # create a single ground sensor to then filter against robot body
+    # parts. Another example is at
+    # https://isaac-sim.github.io/IsaacLab/main/source/overview/core-concepts/sensors/contact_sensor.html.
+    ground_contact_sensors = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/ground_pad",
+        debug_vis=True,
+        history_length=4, # same as env
+        filter_prim_paths_expr=["{ENV_REGEX_NS}/Robot/FL_hip",
+                                "{ENV_REGEX_NS}/Robot/FR_hip",
+                                "{ENV_REGEX_NS}/Robot/RL_hip",
+                                "{ENV_REGEX_NS}/Robot/RR_hip",
+                                "{ENV_REGEX_NS}/Robot/FL_thigh",
+                                "{ENV_REGEX_NS}/Robot/FR_thigh",
+                                "{ENV_REGEX_NS}/Robot/RL_thigh",
+                                "{ENV_REGEX_NS}/Robot/RR_thigh",
+                                "{ENV_REGEX_NS}/Robot/FL_calf",
+                                "{ENV_REGEX_NS}/Robot/FR_calf",
+                                "{ENV_REGEX_NS}/Robot/RL_calf",
+                                "{ENV_REGEX_NS}/Robot/RR_calf",
+                                "{ENV_REGEX_NS}/Robot/trunk"]
+    )
+    
 
 @configclass
 class ActionsCfg:
@@ -138,15 +183,39 @@ class RewardsCfg:
     # - reward for foot tracking activates once trunk pose is within tolerance
 
 
+def illegal_contact_filtered(env: ManagerBasedRLEnv, threshold: float, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
+    """Terminate when the body filtered contact force on the sensor exceeds the force threshold."""
+    # extract the used quantities (to enable type-hinting)
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    # shape of force matrix w history: (num_envs, history_length, num_bodies, num_filters, 3)
+    forces = contact_sensor.data.force_matrix_w_history[:, :, sensor_cfg.body_ids]
+    shape = forces.shape
+    assert len(shape) == 5
+    forces = forces.reshape((shape[0], shape[1], shape[2]*shape[3], 3)) # combine num_bodies and num_filters
+    # check if any contact force exceeds the threshold
+    return torch.any(
+        torch.max(torch.norm(forces, dim=-1), dim=1)[0] > threshold, dim=1
+    )
+    
+
 @configclass
 class TerminationCfg:
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
     fall = DoneTerm(func=mdp.bad_orientation, params={"limit_angle": math.pi/2})
+    # terminate if the trunk body collides with anything (eg. legs hitting trunk)
     collision_base = DoneTerm(
         func=mdp.illegal_contact,
         params={'threshold': 0.1,
-                'sensor_cfg': SceneEntityCfg("contact_sensors", body_names="trunk"),
-                'threshold': 1.0})
+                'sensor_cfg': SceneEntityCfg("contact_sensors", body_names="trunk")})
+    # Terminate if anything other than the feet collide with the ground. This
+    # avoids the robot trying to rest a knee on the ground.
+    collision_ground = DoneTerm(
+        func=illegal_contact_filtered,
+        params={'threshold': 0.1,
+                'sensor_cfg': SceneEntityCfg("ground_contact_sensors",
+                                             body_names="ground_pad"),
+                },
+    )
 
 
 @configclass
@@ -165,13 +234,13 @@ class CommandsCfg:
         )
     )
     
-    height = envs.UniformHeightCommandCfg(
-        asset_name = "robot",
-        body_name = "trunk",
-        resampling_time_range = (5.0, 5.0),
-        debug_vis = True,
-        ranges = mdp.Uniform
-    )
+    # height = envs.UniformHeightCommandCfg(
+    #     asset_name = "robot",
+    #     body_name = "trunk",
+    #     resampling_time_range = (5.0, 5.0),
+    #     debug_vis = True,
+    #     ranges = mdp.Uniform
+    # )
     
     
 @configclass
