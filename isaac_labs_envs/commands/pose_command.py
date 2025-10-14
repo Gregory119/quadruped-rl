@@ -1,4 +1,4 @@
-"""Sub-module containing command generators for pose tracking."""
+"""Sub-module containing command generators for position tracking."""
 
 from __future__ import annotations
 
@@ -9,25 +9,24 @@ from typing import TYPE_CHECKING
 from isaaclab.assets import Articulation
 from isaaclab.managers import CommandTerm
 from isaaclab.markers import VisualizationMarkers
-from isaaclab.utils.math import combine_frame_transforms, compute_pose_error, quat_from_euler_xyz, quat_unique, pose_inv, make_pose, unmake_pose, quat_from_matrix, matrix_from_quat
+from isaaclab.utils.math import combine_frame_transforms, subtract_frame_transforms
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv
 
-    from .commands_cfg import UniformEnvPoseCommandCfg
+    from .commands_cfg import UniformEnvPosCommandCfg
 
 
-class UniformEnvPoseCommand(CommandTerm):
-    """Command generator for generating pose commands uniformly in the
+class UniformEnvPosCommand(CommandTerm):
+    """Command generator for generating position commands uniformly in the
     environment frame, which is assumed to have the same orientation as the
     simulation world frame.
 
-    The command generator generates poses by sampling positions uniformly within specified
-    regions in cartesian space. For orientation, it samples uniformly the euler angles
-    (roll-pitch-yaw) and converts them into quaternion representation (w, x, y, z).
+    The command generator generates positions by sampling positions uniformly
+    within specified regions in cartesian space.
 
-    The position and orientation commands are generated in the environment frame
-    of the robot, and then represented in the base frame of the robot.
+    The position command is generated in the environment frame of the robot, and
+    then represented in the base frame of the robot.
 
     .. caution::
 
@@ -37,10 +36,10 @@ class UniformEnvPoseCommand(CommandTerm):
 
     """
 
-    cfg: UniformEnvPoseCommandCfg
+    cfg: UniformEnvPosCommandCfg
     """Configuration for the command generator."""
 
-    def __init__(self, cfg: UniformEnvPoseCommandCfg, env: ManagerBasedEnv):
+    def __init__(self, cfg: UniformEnvPosCommandCfg, env: ManagerBasedEnv):
         """Initialize the command generator class.
 
         Args:
@@ -55,25 +54,23 @@ class UniformEnvPoseCommand(CommandTerm):
         self.body_idx = self.robot.find_bodies(cfg.body_name)[0][0]
 
         # create buffers
-        # -- commands: (x, y, z, qw, qx, qy, qz) in root frame
-        # pose command in the base frame
-        self.pose_command_b = torch.zeros(self.num_envs, 7, device=self.device)
-        self.pose_command_b[:, 3] = 1.0 # set qw=1
-        # pose command in the environment frame
-        self.pose_command_e = torch.zeros_like(self.pose_command_b)
-        # pose command in the world frame
-        self.pose_command_w = torch.zeros_like(self.pose_command_b)
+        # -- commands: (x, y, z) in root frame
+        # positions command in the base frame
+        self.pos_command_b = torch.zeros(self.num_envs, 3, device=self.device)
+        # pos command in the environment frame
+        self.pos_command_e = torch.zeros_like(self.pos_command_b)
+        # pos command in the world frame
+        self.pos_command_w = torch.zeros_like(self.pos_command_b)
         # Tensor of (4,4) homogeneous transformations representing the
         # environment frame w.r.t the world frame
-        self.Twe = torch.zeros(self.num_envs, 4, 4, device=self.device)
-        self.Twe[:, :4, :4] = torch.eye(4) # same orientation as world
-        self.Twe[:, :3, 3] = self._env.scene.env_origins[:] # shape=(num_envs, 3)
+        self.pose_we = torch.zeros(self.num_envs, 7, device=self.device)
+        self.pose_we[:, 3] = 1.0 # same orientation as world
+        self.pose_we[:, :3] = self._env.scene.env_origins[:] # shape=(num_envs, 3)
         # -- metrics
         self.metrics["position_error"] = torch.zeros(self.num_envs, device=self.device)
-        self.metrics["orientation_error"] = torch.zeros(self.num_envs, device=self.device)
 
     def __str__(self) -> str:
-        msg = "UniformEnvPoseCommand:\n"
+        msg = "UniformEnvPosCommand:\n"
         msg += f"\tCommand dimension: {tuple(self.command.shape[1:])}\n"
         msg += f"\tResampling time range: {self.cfg.resampling_time_range}\n"
         return msg
@@ -84,11 +81,9 @@ class UniformEnvPoseCommand(CommandTerm):
 
     @property
     def command(self) -> torch.Tensor:
-        """The desired pose command. Shape is (num_envs, 7).
-
-        The first three elements correspond to the position, followed by the quaternion orientation in (w, x, y, z).
+        """The desired position command. Shape is (num_envs, 3).
         """
-        return self.pose_command_b
+        return self.pos_command_b
 
     """
     Implementation specific functions.
@@ -96,42 +91,23 @@ class UniformEnvPoseCommand(CommandTerm):
 
     def _update_metrics(self):
         # compute the error
-        pos_error, rot_error = compute_pose_error(
-            self.pose_command_w[:, :3],
-            self.pose_command_w[:, 3:],
-            self.robot.data.body_pos_w[:, self.body_idx],
-            self.robot.data.body_quat_w[:, self.body_idx],
-        )
+        pos_error = self.pos_command_w - self.robot.data.body_pos_w[:, self.body_idx]
         self.metrics["position_error"] = torch.norm(pos_error, dim=-1)
-        self.metrics["orientation_error"] = torch.norm(rot_error, dim=-1)
 
     def _resample_command(self, env_ids: Sequence[int]):
-        # sample new pose targets in the environment frame
-        # -- position
+        # sample new position targets in the environment frame
         r = torch.empty(len(env_ids), device=self.device)
-        self.pose_command_e[env_ids, 0] = r.uniform_(*self.cfg.ranges.pos_x)
-        self.pose_command_e[env_ids, 1] = r.uniform_(*self.cfg.ranges.pos_y)
-        self.pose_command_e[env_ids, 2] = r.uniform_(*self.cfg.ranges.pos_z)
-        # -- orientation
-        euler_angles = torch.zeros_like(self.pose_command_e[env_ids, :3])
-        euler_angles[:, 0].uniform_(*self.cfg.ranges.roll)
-        euler_angles[:, 1].uniform_(*self.cfg.ranges.pitch)
-        euler_angles[:, 2].uniform_(*self.cfg.ranges.yaw)
-        quat = quat_from_euler_xyz(euler_angles[:, 0], euler_angles[:, 1], euler_angles[:, 2])
-        # make sure the quaternion has real part as positive
-        self.pose_command_e[env_ids, 3:] = quat_unique(quat) if self.cfg.make_quat_unique else quat
-
-        # find Twe (environment frame w.r.t world frame with the same orientation)
-        pos_we = self._env.scene.env_origins[env_ids]
-        quat_we = torch.zeros(len(env_ids), 4, device=self.device)
-        quat_we[:, 0] = 1.0 # qw=1.0 (same orientation as world)
+        self.pos_command_e[env_ids, 0] = r.uniform_(*self.cfg.ranges.pos_x)
+        self.pos_command_e[env_ids, 1] = r.uniform_(*self.cfg.ranges.pos_y)
+        self.pos_command_e[env_ids, 2] = r.uniform_(*self.cfg.ranges.pos_z)
         
         # also represent command in world frame for visualization
-        self.pose_command_w[env_ids, :3], self.pose_command_w[env_ids, 3:] = combine_frame_transforms(
-            pos_we,
-            quat_we,
-            self.pose_command_e[env_ids, :3],
-            self.pose_command_e[env_ids, 3:]
+        # p_w = Rwe*p_e + p_we
+        self.pos_command_w[env_ids], _ = combine_frame_transforms(
+            self.pose_we[env_ids, :3],
+            self.pose_we[env_ids, 3:],
+            self.pos_command_e[env_ids],
+            None,
         )
 
     def _update_command(self):
@@ -145,38 +121,37 @@ class UniformEnvPoseCommand(CommandTerm):
         # Tbe: environment frame w.r.t base frame
         # Tec: command in environment frame
         
-        # find Twb
+        # find Tbe = Twb^{-1} * Twe
         pose_wb = self.robot.data.root_pose_w # [[pos, quat]], shape=(num_envs, 7)
-        R_wb = matrix_from_quat(pose_wb[:,3:])
-        Twb = make_pose(pos=pose_wb[:,:3], rot=R_wb) # shape=(num_envs, (4,4))
-        
-        # find Tbe = (Twb)^{-1} Twe
-        Tbe = torch.matmul(pose_inv(Twb), self.Twe) # shape=(num_envs, (4,4))
-        pos_be, R_be = unmake_pose(Tbe)
-        quat_be = quat_from_matrix(R_be)
-        # find Tbc
-        self.pose_command_b[:, :3], self.pose_command_b[:, 3:] = combine_frame_transforms(
+        pos_be, quat_be = subtract_frame_transforms(
+            pose_wb[:,:3],
+            pose_wb[:,3:],
+            self.pose_we[:,:3],
+            self.pose_we[:,3:]
+        )
+        # find position command in robot base frame
+        self.pos_command_b[:], _ = combine_frame_transforms(
             pos_be,
             quat_be,
-            self.pose_command_e[:, :3],
-            self.pose_command_e[:, 3:],
+            self.pos_command_e,
+            None
         )
 
     def _set_debug_vis_impl(self, debug_vis: bool):
         # create markers if necessary for the first time
         if debug_vis:
-            if not hasattr(self, "goal_pose_visualizer"):
-                # -- goal pose
-                self.goal_pose_visualizer = VisualizationMarkers(self.cfg.goal_pose_visualizer_cfg)
-                # -- current body pose
-                self.current_pose_visualizer = VisualizationMarkers(self.cfg.current_pose_visualizer_cfg)
+            if not hasattr(self, "goal_pos_visualizer"):
+                # -- goal pos
+                self.goal_pos_visualizer = VisualizationMarkers(self.cfg.goal_pos_visualizer_cfg)
+                # -- current body pos
+                self.current_pos_visualizer = VisualizationMarkers(self.cfg.current_pos_visualizer_cfg)
             # set their visibility to true
-            self.goal_pose_visualizer.set_visibility(True)
-            self.current_pose_visualizer.set_visibility(True)
+            self.goal_pos_visualizer.set_visibility(True)
+            self.current_pos_visualizer.set_visibility(True)
         else:
-            if hasattr(self, "goal_pose_visualizer"):
-                self.goal_pose_visualizer.set_visibility(False)
-                self.current_pose_visualizer.set_visibility(False)
+            if hasattr(self, "goal_pos_visualizer"):
+                self.goal_pos_visualizer.set_visibility(False)
+                self.current_pos_visualizer.set_visibility(False)
 
     def _debug_vis_callback(self, event):
         # check if robot is initialized
@@ -184,8 +159,8 @@ class UniformEnvPoseCommand(CommandTerm):
         if not self.robot.is_initialized:
             return
         # update the markers
-        # -- goal pose
-        self.goal_pose_visualizer.visualize(self.pose_command_w[:, :3], self.pose_command_w[:, 3:])
+        # -- goal pos
+        self.goal_pos_visualizer.visualize(self.pos_command_w)
         # -- current body pose
         body_link_pose_w = self.robot.data.body_link_pose_w[:, self.body_idx]
-        self.current_pose_visualizer.visualize(body_link_pose_w[:, :3], body_link_pose_w[:, 3:7])
+        self.current_pos_visualizer.visualize(body_link_pose_w[:, :3])
