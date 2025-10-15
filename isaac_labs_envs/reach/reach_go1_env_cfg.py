@@ -206,6 +206,26 @@ def track_height_exp(env: ManagerBasedRLEnv,
     return torch.exp(-torch.norm(error, dim=1) / var)
 
 
+def stay_at_zero_xy_exp(env: ManagerBasedRLEnv,
+                        var: float,
+                        body_name="trunk") -> torch.Tensor:
+    assert(var >= 0.0)
+    # get body id/index
+    robot = env.scene["robot"]
+    body_ids, _ = robot.find_bodies(body_name)
+    assert(len(body_ids)==1)
+    body_idx = body_ids[0]
+
+    # current position in world/environment frames
+    pos = robot.data.body_pos_w[:, body_idx]
+
+    # xy error
+    error = pos[:,:2]
+
+    # calculate reward
+    return torch.exp(-torch.norm(error, dim=1) / var)
+
+
 @configclass
 class RewardsCfg:
     foot_tracking = RewTerm(func=track_foot_exp, weight=0.4, params={"var": 1.0/3.0})
@@ -215,7 +235,8 @@ class RewardsCfg:
         params={"threshold": 0.1,
                 "sensor_cfg": SceneEntityCfg("contact_sensors",
                                              body_names=[".*_hip", ".*_thigh", ".*_calf", "trunk"])})
-    height_tracking = RewTerm(func=track_foot_exp, weight=0.6, params={"var": 1.0/3.0})
+    #height_tracking = RewTerm(func=track_foot_exp, weight=0.6, params={"var": 1.0/3.0})
+    stay_at_origin = RewTerm(func=stay_at_zero_xy_exp, weight=0.6, params={"var": 1.0/3.0})
     
 
 def illegal_contact_filtered(env: ManagerBasedRLEnv, threshold: float, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
@@ -274,13 +295,13 @@ class CommandsCfg:
         )
     )
 
-    height = envs.UniformHeightCommandCfg(
-        asset_name = "robot",
-        body_name = "trunk",
-        resampling_time_range = (5.0, 5.0),
-        debug_vis = True,
-        range_height = (0.3, 0.3),
-    )
+    # height = envs.UniformHeightCommandCfg(
+    #     asset_name = "robot",
+    #     body_name = "trunk",
+    #     resampling_time_range = (5.0, 5.0),
+    #     debug_vis = True,
+    #     range_height = (0.3, 0.3),
+    # )
     
     
 @configclass
