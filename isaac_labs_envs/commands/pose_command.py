@@ -97,9 +97,16 @@ class UniformEnvPosCommand(CommandTerm):
     def _resample_command(self, env_ids: Sequence[int]):
         # sample new position targets in the environment frame
         r = torch.empty(len(env_ids), device=self.device)
-        self.pos_command_e[env_ids, 0] = r.uniform_(*self.cfg.ranges.pos_x)
-        self.pos_command_e[env_ids, 1] = r.uniform_(*self.cfg.ranges.pos_y)
-        self.pos_command_e[env_ids, 2] = r.uniform_(*self.cfg.ranges.pos_z)
+        pos_r = r.uniform_(*self.cfg.ranges.pos_r).clone()
+        pos_theta = r.uniform_(*self.cfg.ranges.pos_theta).clone()
+        pos_z = r.uniform_(*self.cfg.ranges.pos_z)
+        # convert cylindrical coordinates to cartesian coordinates
+        # x = r*cos(theta)
+        # y = r*sin(theta)
+        # z = z
+        self.pos_command_e[env_ids, 0] = pos_r * torch.cos(pos_theta)
+        self.pos_command_e[env_ids, 1] = pos_r * torch.sin(pos_theta)
+        self.pos_command_e[env_ids, 2] = pos_z
         
         # also represent command in world frame for visualization
         # p_w = Rwe*p_e + p_we

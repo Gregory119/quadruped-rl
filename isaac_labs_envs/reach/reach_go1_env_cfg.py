@@ -30,6 +30,12 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
+# robot dimensions for reference (folded)
+g_length = 0.588
+g_width = 0.220
+g_height = 0.290
+g_height_standing = 0.400
+
 
 @configclass
 class Go1SceneCfg(InteractiveSceneCfg):
@@ -262,9 +268,9 @@ class CommandsCfg:
         resampling_time_range = (5.0, 5.0),
         debug_vis = True,
         ranges = envs.UniformEnvPosCommandCfg.Ranges(
-            pos_x = (0.4, 0.4),
-            pos_y = (-0.15, -0.15),
-            pos_z = (0.2, 0.2),
+            pos_r = (g_length/2 + g_height*3/2, g_length/2 + g_height*3/2),
+            pos_theta = (-math.pi/2, math.pi/2),
+            pos_z = (g_height + g_height*3/2, g_height + g_height*3/2),
         )
     )
 

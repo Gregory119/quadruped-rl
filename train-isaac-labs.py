@@ -2,7 +2,7 @@
 python train-isaac-labs.py --task <env. name>
 
 eg.
-python train-isaac-labs.py --task Isaac-Reach-Go1-v0
+python train-isaac-labs.py --task Isaac-Reach-Go1-v0 --headless --video
 """
 
 # Launch Isaac Sim Simulator first

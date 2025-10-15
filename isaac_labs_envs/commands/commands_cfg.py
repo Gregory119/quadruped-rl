@@ -22,13 +22,14 @@ class UniformEnvPosCommandCfg(CommandTermCfg):
 
     @configclass
     class Ranges:
-        """Uniform distribution ranges for the pose commands."""
+        """Uniform distribution ranges in spherical coordinates for the position
+        commands."""
 
-        pos_x: tuple[float, float] = MISSING
-        """Range for the x position (in m)."""
+        pos_r: tuple[float, float] = MISSING
+        """Range for the radial distance (in m)."""
 
-        pos_y: tuple[float, float] = MISSING
-        """Range for the y position (in m)."""
+        pos_theta: tuple[float, float] = MISSING
+        """Range for the azimuth angle (in rad)."""
 
         pos_z: tuple[float, float] = MISSING
         """Range for the z position (in m)."""
