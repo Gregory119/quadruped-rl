@@ -202,20 +202,15 @@ def track_height_exp(env: ManagerBasedRLEnv,
 
 @configclass
 class RewardsCfg:
-    foot_tracking = RewTerm(func=track_foot_exp, weight=0.5, params={"var": 0.6})
+    foot_tracking = RewTerm(func=track_foot_exp, weight=0.1, params={"var": 1.0/3.0})
     collisions = RewTerm(
         func=mdp.undesired_contacts,
         weight=-0.1,
         params={"threshold": 0.1,
                 "sensor_cfg": SceneEntityCfg("contact_sensors",
                                              body_names=[".*_hip", ".*_thigh", ".*_calf", "trunk"])})
-    height_tracking = RewTerm(func=track_foot_exp, weight=0.5, params={"var": 0.3})
+    height_tracking = RewTerm(func=track_foot_exp, weight=0.9, params={"var": 1.0/3.0})
     
-    # todo:
-    # - reward for trunk height command (x and y targets are zero)
-    # - reward for trunk planar xy orientation pointing along the environment x direction
-    # - reward for foot tracking activates once trunk pose is within tolerance
-
 
 def illegal_contact_filtered(env: ManagerBasedRLEnv, threshold: float, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
     """Terminate when the contact force between the sensor and filtered body
