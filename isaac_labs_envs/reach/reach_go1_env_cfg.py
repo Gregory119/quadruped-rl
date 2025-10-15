@@ -134,8 +134,8 @@ class ObservationsCfg:
                                    params={"command_name": "right_foot_pos"})
 
         # base/trunk height command
-        base_height_command = ObsTerm(func=mdp.generated_commands,
-                                      params={"command_name": "height"})
+        # base_height_command = ObsTerm(func=mdp.generated_commands,
+        #                               params={"command_name": "height"})
 
         def __post_init__(self) -> None:
             self.enable_corruption = False
@@ -185,10 +185,11 @@ def track_height_exp(env: ManagerBasedRLEnv,
                      body_name="trunk",
                      command_name="height") -> torch.Tensor:
     assert(var >= 0.0)
-    # get height goal in environment frames
+    # Get height goal in environment frames. Keep the xy coordinates at the
+    # origin.
     height_cmd = env.command_manager.get_command(command_name)
-    height_goal = torch.zeros((len(height_cmd), 3), device=env.device)
-    height_goal[:,2] = height_cmd
+    pos_goal_e = torch.zeros((len(height_cmd), 3), device=env.device)
+    pos_goal_e[:,2] = height_cmd
 
     # get body id/index
     robot = env.scene["robot"]
@@ -196,11 +197,23 @@ def track_height_exp(env: ManagerBasedRLEnv,
     assert(len(body_ids)==1)
     body_idx = body_ids[0]
 
-    # current height in world/environment frames
-    height = robot.data.body_pos_w[:, body_idx]
+    # current body position in world frame
+    pos_body_w = robot.data.body_pos_w[:, body_idx]
+    # transform current body pos into environment frame
+    pos_we = env.scene.env_origins
+    quat_we = torch.zeros((len(pos_we), 4), device=env.device)
+    quat_we[:,0] = 1.0
+
+    # p_body_e = Rwe^{-1} pos_body_w + p_we
+    pos_body_e, _ = subtract_frame_transforms(
+        pos_we,
+        quat_we,
+        pos_body_w,
+        None,
+    )
 
     # error
-    error = height_goal - height
+    error = pos_goal_e - pos_body_e
 
     # calculate reward
     return torch.exp(-torch.norm(error, dim=1) / var)
@@ -216,11 +229,23 @@ def stay_at_zero_xy_exp(env: ManagerBasedRLEnv,
     assert(len(body_ids)==1)
     body_idx = body_ids[0]
 
-    # current position in world/environment frames
-    pos = robot.data.body_pos_w[:, body_idx]
+    # current body position in world frame
+    pos_body_w = robot.data.body_pos_w[:, body_idx]
+    # transform current body pos into environment frame
+    pos_we = env.scene.env_origins
+    quat_we = torch.zeros((len(pos_we), 4), device=env.device)
+    quat_we[:,0] = 1.0
+
+    # p_body_e = Rwe^{-1} pos_body_w + p_we
+    pos_body_e, _ = subtract_frame_transforms(
+        pos_we,
+        quat_we,
+        pos_body_w,
+        None,
+    )
 
     # xy error
-    error = pos[:,:2]
+    error = pos_body_e[:,:2]
 
     # calculate reward
     return torch.exp(-torch.norm(error, dim=1) / var)
