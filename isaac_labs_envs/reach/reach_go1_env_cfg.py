@@ -133,7 +133,7 @@ class ObservationsCfg:
         # observation terms (order preserved)
 
         # joint positions and velocities relative to the default values
-        joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel)
+        joint_pos_rel = ObsTerm(func=mdp.joint_pos_limit_normalized)
         joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel)
 
         # gravity vector in the base frame
