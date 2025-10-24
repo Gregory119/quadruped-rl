@@ -27,7 +27,6 @@ from isaaclab.terrains import (
 from isaaclab.utils.assets import ISAACLAB_NUCLEUS_DIR
 
 from isaaclab.envs import ManagerBasedRLEnvCfg
-from isaaclab.utils.math import subtract_frame_transforms
 
 # pre-defined configs
 from isaaclab_assets import UNITREE_GO1_CFG
@@ -164,123 +163,29 @@ class ObservationsCfg:
     policy: PolicyCfg = PolicyCfg()
 
 
-# helper function for calculating the reward for foot tracking
-def track_foot_exp(env: ManagerBasedRLEnv,
-                   var: float,
-                   foot_body_name="FR_foot",
-                   command_name="right_foot_pos"):
-    assert(var >= 0.0)
-    # get foot target in base frame (Tbg)
-    pos_goal_b = env.command_manager.get_command(command_name)
-
-    # get foot body id/index
-    robot = env.scene["robot"]
-    body_ids, _ = robot.find_bodies(foot_body_name)
-    assert(len(body_ids)==1)
-    body_idx = body_ids[0]
-
-    # current foot pos in world frame (Twf)
-    pos_foot_w = robot.data.body_pos_w[:, body_idx]
-
-    # transform current foot pos into robot base frame
-    pose_base_w = robot.data.root_pose_w # Twb
-    # p_bf = Rwb^{-1} p_wf + p_bw
-    pos_foot_b, _ = subtract_frame_transforms(
-        pose_base_w[:,:3],
-        pose_base_w[:,3:],
-        pos_foot_w,
-        None,
-    )
-
-    # position error
-    pos_error = pos_foot_b - pos_goal_b
-
-    # calculate reward
-    return torch.exp(-torch.norm(pos_error, dim=1) / var)
-
-
-def track_height_exp(env: ManagerBasedRLEnv,
-                     var: float,
-                     body_name="trunk",
-                     command_name="height") -> torch.Tensor:
-    assert(var >= 0.0)
-    # Get height goal in environment frames. Keep the xy coordinates at the
-    # origin.
-    height_cmd = env.command_manager.get_command(command_name)
-    pos_goal_e = torch.zeros((len(height_cmd), 3), device=env.device)
-    pos_goal_e[:,2] = height_cmd
-
-    # get body id/index
-    robot = env.scene["robot"]
-    body_ids, _ = robot.find_bodies(body_name)
-    assert(len(body_ids)==1)
-    body_idx = body_ids[0]
-
-    # current body position in world frame
-    pos_body_w = robot.data.body_pos_w[:, body_idx]
-    # transform current body pos into environment frame
-    pos_we = env.scene.env_origins
-    quat_we = torch.zeros((len(pos_we), 4), device=env.device)
-    quat_we[:,0] = 1.0
-
-    # p_body_e = Rwe^{-1} pos_body_w + p_we
-    pos_body_e, _ = subtract_frame_transforms(
-        pos_we,
-        quat_we,
-        pos_body_w,
-        None,
-    )
-
-    # error
-    error = pos_goal_e - pos_body_e
-
-    # calculate reward
-    return torch.exp(-torch.norm(error, dim=1) / var)
-
-
-def stay_at_zero_xy_exp(env: ManagerBasedRLEnv,
-                        var: float,
-                        body_name="trunk") -> torch.Tensor:
-    assert(var >= 0.0)
-    # get body id/index
-    robot = env.scene["robot"]
-    body_ids, _ = robot.find_bodies(body_name)
-    assert(len(body_ids)==1)
-    body_idx = body_ids[0]
-
-    # current body position in world frame
-    pos_body_w = robot.data.body_pos_w[:, body_idx]
-    # transform current body pos into environment frame
-    pos_we = env.scene.env_origins
-    quat_we = torch.zeros((len(pos_we), 4), device=env.device)
-    quat_we[:,0] = 1.0
-
-    # p_body_e = Rwe^{-1} pos_body_w + p_we
-    pos_body_e, _ = subtract_frame_transforms(
-        pos_we,
-        quat_we,
-        pos_body_w,
-        None,
-    )
-
-    # xy error
-    error = pos_body_e[:,:2]
-
-    # calculate reward
-    return torch.exp(-torch.norm(error, dim=1) / var)
-
-
 @configclass
 class RewardsCfg:
-    foot_tracking = RewTerm(func=track_foot_exp, weight=0.4, params={"var": 1.0/3.0})
+    foot_tracking = RewTerm(func=envs.mdp.track_foot_exp, weight=1.0, params={"var": g_max_abs_r})
     collisions = RewTerm(
         func=mdp.undesired_contacts,
-        weight=-0.1,
+        weight=-0.5,
         params={"threshold": 0.1,
                 "sensor_cfg": SceneEntityCfg("contact_sensors",
                                              body_names=[".*_hip", ".*_thigh", ".*_calf", "trunk"])})
-    #height_tracking = RewTerm(func=track_foot_exp, weight=0.6, params={"var": 1.0/3.0})
-    stay_at_origin = RewTerm(func=stay_at_zero_xy_exp, weight=0.0, params={"var": 1.0/3.0})
+    # This helps the learn to lift the foot off of the floor, but it doesn't
+    # help it learn to move its foot to the goal position. For that it's
+    # probably worth investigating (by looking at training stats) whether an
+    # adaptive learning rate algorithm will help. Check the code of the paper.
+    # foot_off_floor = RewTerm(
+    #     func=mdp.undesired_contacts,
+    #     weight=-0.1,
+    #     params={"threshold": 0.01,
+    #             "sensor_cfg": SceneEntityCfg("contact_sensors",
+    #                                          body_names=["FR_foot"])})
+
+    # track_height = RewTerm(func=envs.mdp.track_height_exp, weight=0.25, params={"var": g_max_abs_r})
+    # base_pos = RewTerm(func=envs.mdp.stay_at_zero_xy_exp, weight=0.25, params={"var": g_max_abs_r})
+    # orient_forward = RewTerm(func=envs.mdp.orient_forward, weight=0.25)
     
 
 def illegal_contact_filtered(env: ManagerBasedRLEnv, threshold: float, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
@@ -310,8 +215,10 @@ class TerminationCfg:
     # terminate if the trunk body collides with anything (eg. legs hitting trunk)
     collision_base = DoneTerm(
         func=mdp.illegal_contact,
-        params={'threshold': 0.1,
-                'sensor_cfg': SceneEntityCfg("contact_sensors", body_names="trunk")})
+        params={'threshold': 0.01,
+                'sensor_cfg': SceneEntityCfg(
+                    "contact_sensors",
+                    body_names=["trunk"])})
     # Terminate if anything other than the feet collide with the ground. This
     # avoids the robot trying to rest a knee on the ground.
     collision_ground = DoneTerm(
