@@ -136,14 +136,12 @@ class ObservationsCfg:
         joint_pos_rel = ObsTerm(func=mdp.joint_pos_limit_normalized)
         joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel)
 
-        # gravity vector in the base frame
+        # These two terms act as the robot pose state.
+        # robot base position in the environment frame (todo: change this to be
+        # the position of the environment origin in the robot base frame)
+        base_pos = ObsTerm(func=mdp.root_pos_w)
+        # gravity vector in the base frame for orientation
         base_gravity = ObsTerm(func=mdp.projected_gravity)
-
-        # robot base height relative to world frame, expressed in the world frame
-        #base_pos_z = ObsTerm(func=mdp.base_pos_z)
-
-        # robot base pose in the environment frame
-        base_pose = ObsTerm(func=mdp.body_pose_w)
 
         # linear velocity of the base expressed in the base frame
         base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
