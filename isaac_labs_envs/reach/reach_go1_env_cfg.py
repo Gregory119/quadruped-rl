@@ -40,6 +40,10 @@ g_length = 0.588
 g_width = 0.220
 g_height = 0.290
 g_height_standing = 0.400
+g_height_stand_trunk = g_height_standing - g_height/2
+g_max_abs_r = g_height_standing
+
+
 ROUGH_GROUND_CFG = TerrainGeneratorCfg(
     seed=42,
     size=(1.5, 1.5), # keep this at (1.5, 1.5) for good tuning performance
@@ -252,9 +256,14 @@ class CommandsCfg:
         resampling_time_range = (5.0, 5.0),
         debug_vis = True,
         ranges = envs.UniformEnvPosCommandCfg.Ranges(
-            pos_r = (g_length/2 + g_height*3/2, g_length/2 + g_height*3/2),
-            pos_theta = (-math.pi/2, math.pi/2),
-            pos_z = (g_height + g_height*3/2, g_height + g_height*3/2),
+            pos_r = (0., g_height_stand_trunk),
+            pos_theta = (-math.pi/2, 0.0),
+            pos_z = (0.0, g_height_stand_trunk*2),
+        ),
+        offset_sample_xyz = (
+            g_length/2,
+            -g_width/2,
+            0.0
         )
     )
 

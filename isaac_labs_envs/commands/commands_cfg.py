@@ -37,13 +37,19 @@ class UniformEnvPosCommandCfg(CommandTermCfg):
     ranges: Ranges = MISSING
     """Ranges for the commands."""
 
+    offset_sample_xyz: tuple[float, float, float] = MISSING
+    """Optional (x,y,z) offset of sampling origin with respect to the
+    environment frame."""
+
     goal_pos_visualizer_cfg: VisualizationMarkersCfg = SPHERE_MARKER_CFG.replace(prim_path="/Visuals/Command/goal_pos")
-    """The configuration for the goal pos visualization marker. Defaults to SPHERE_MARKER_CFG."""
+    """The configuration for the goal pos visualization marker. Defaults to
+    SPHERE_MARKER_CFG."""
 
     current_pos_visualizer_cfg: VisualizationMarkersCfg = SPHERE_MARKER_CFG.replace(
         prim_path="/Visuals/Command/body_pos"
     )
-    """The configuration for the current pos visualization marker. Defaults to SPHERE_MARKER_CFG."""
+    """The configuration for the current pos visualization marker. Defaults to
+    SPHERE_MARKER_CFG."""
 
 
 @configclass
