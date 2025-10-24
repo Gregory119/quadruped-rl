@@ -19,6 +19,12 @@ from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors import ContactSensorCfg
+from isaaclab.terrains import (
+    HfRandomUniformTerrainCfg,
+    TerrainImporterCfg,
+    TerrainGeneratorCfg
+)
+from isaaclab.utils.assets import ISAACLAB_NUCLEUS_DIR
 
 from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.utils.math import subtract_frame_transforms
@@ -35,29 +41,54 @@ g_length = 0.588
 g_width = 0.220
 g_height = 0.290
 g_height_standing = 0.400
+ROUGH_GROUND_CFG = TerrainGeneratorCfg(
+    seed=42,
+    size=(1.5, 1.5), # keep this at (1.5, 1.5) for good tuning performance
+    border_width=0.,
+    # size should fit 4096/4=1024 environments (32x32)
+    num_rows=32,
+    num_cols=32,
+    horizontal_scale=0.05,
+    vertical_scale=0.01,
+    use_cache=True,
+    sub_terrains={
+        "height-field": HfRandomUniformTerrainCfg(
+            proportion=1.0,
+            noise_range=(0.0,0.03),
+            noise_step=0.03,
+            border_width=0.,
+            horizontal_scale=0.05,
+            vertical_scale=0.01,
+        )
+    },
+)
 
 
 @configclass
 class Go1SceneCfg(InteractiveSceneCfg):
-    # ground plane
-    ground = AssetBaseCfg(prim_path="/World/defaultGroundPlane", spawn=sim_utils.GroundPlaneCfg())
     # lights
     dome_light = AssetBaseCfg(prim_path="/World/Light", spawn=sim_utils.DomeLightCfg(intensity=3000.0, color=(0.75, 0.75, 0.75)))
     # articulation
     robot: ArticulationCfg = UNITREE_GO1_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
-    ground_pad = RigidObjectCfg(
-        prim_path="{ENV_REGEX_NS}/ground_pad",
-        spawn=sim_utils.CuboidCfg(
-            size=(5, 5, 0.001),
-            rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
-            mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
-            collision_props=sim_utils.CollisionPropertiesCfg(),
-            activate_contact_sensors=True,
-            physics_material=sim_utils.RigidBodyMaterialCfg(static_friction=1.0),
+    # terrain
+    terrain = TerrainImporterCfg(
+        prim_path="/World/ground",
+        terrain_type="generator",
+        terrain_generator=ROUGH_GROUND_CFG,
+        physics_material=sim_utils.RigidBodyMaterialCfg(
+            friction_combine_mode="multiply",
+            restitution_combine_mode="multiply",
+            static_friction=1.0,
+            dynamic_friction=1.0,
         ),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=(0., 0., 0.)),
-    )    
+        visual_material=sim_utils.MdlFileCfg(
+            mdl_path=f"{ISAACLAB_NUCLEUS_DIR}/Materials/TilesMarbleSpiderWhiteBrickBondHoned/TilesMarbleSpiderWhiteBrickBondHoned.mdl",
+            project_uvw=True,
+            texture_scale=(0.25, 0.25),
+        ),
+        debug_vis=False,
+    )
     
     # sensors
     contact_sensors = ContactSensorCfg(prim_path="{ENV_REGEX_NS}/Robot/.*",
@@ -69,29 +100,17 @@ class Go1SceneCfg(InteractiveSceneCfg):
     # a contact sensor can use filter_prim_paths_expr to filter against names of
     # bodies of interest that the sensor makes contact with. This body name
     # filtered data can only be accessed through
-    # contact_sensor.data.force_matrix*. It only supports a contact sensor
-    # containing one body which can come into contact with many environment
-    # bodies. Instead of creating one sensor per robot part, it is simpler to
-    # create a single ground sensor to then filter against robot body
-    # parts. Another example is at
+    # contact_sensor.data.force_matrix*. Apparently it only supports a contact
+    # sensor containing one body which can come into contact with many
+    # environment bodies, but it seems to work here for the case of many bodies
+    # of a contact sensor contacting the single ground terrain mesh
+    # body. Another example is at
     # https://isaac-sim.github.io/IsaacLab/main/source/overview/core-concepts/sensors/contact_sensor.html.
-    ground_contact_sensors = ContactSensorCfg(
-        prim_path="{ENV_REGEX_NS}/ground_pad",
-        debug_vis=True,
-        history_length=4, # same as env
-        filter_prim_paths_expr=["{ENV_REGEX_NS}/Robot/FL_hip",
-                                "{ENV_REGEX_NS}/Robot/FR_hip",
-                                "{ENV_REGEX_NS}/Robot/RL_hip",
-                                "{ENV_REGEX_NS}/Robot/RR_hip",
-                                "{ENV_REGEX_NS}/Robot/FL_thigh",
-                                "{ENV_REGEX_NS}/Robot/FR_thigh",
-                                "{ENV_REGEX_NS}/Robot/RL_thigh",
-                                "{ENV_REGEX_NS}/Robot/RR_thigh",
-                                "{ENV_REGEX_NS}/Robot/FL_calf",
-                                "{ENV_REGEX_NS}/Robot/FR_calf",
-                                "{ENV_REGEX_NS}/Robot/RL_calf",
-                                "{ENV_REGEX_NS}/Robot/RR_calf",
-                                "{ENV_REGEX_NS}/Robot/trunk"]
+    robot_to_ground_contact_sensor = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/.*",
+        history_length=3,
+        track_air_time=True,
+        filter_prim_paths_expr=["/World/ground/terrain/mesh"],
     )
     
 
@@ -261,7 +280,7 @@ class RewardsCfg:
                 "sensor_cfg": SceneEntityCfg("contact_sensors",
                                              body_names=[".*_hip", ".*_thigh", ".*_calf", "trunk"])})
     #height_tracking = RewTerm(func=track_foot_exp, weight=0.6, params={"var": 1.0/3.0})
-    stay_at_origin = RewTerm(func=stay_at_zero_xy_exp, weight=0.6, params={"var": 1.0/3.0})
+    stay_at_origin = RewTerm(func=stay_at_zero_xy_exp, weight=0.0, params={"var": 1.0/3.0})
     
 
 def illegal_contact_filtered(env: ManagerBasedRLEnv, threshold: float, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
@@ -297,9 +316,21 @@ class TerminationCfg:
     # avoids the robot trying to rest a knee on the ground.
     collision_ground = DoneTerm(
         func=illegal_contact_filtered,
-        params={'threshold': 0.1,
-                'sensor_cfg': SceneEntityCfg("ground_contact_sensors",
-                                             body_names="ground_pad"),
+        params={'threshold': 0.01,
+                'sensor_cfg': SceneEntityCfg("robot_to_ground_contact_sensor",
+                                             body_names=["FL_hip",
+                                                         "FR_hip",
+                                                         "RL_hip",
+                                                         "RR_hip",
+                                                         "FL_thigh",
+                                                         "FR_thigh",
+                                                         "RL_thigh",
+                                                         "RR_thigh",
+                                                         "FL_calf",
+                                                         "FR_calf",
+                                                         "RL_calf",
+                                                         "RR_calf",
+                                                         "trunk"]),
                 },
     )
 
@@ -332,7 +363,7 @@ class CommandsCfg:
 @configclass
 class ReachGo1EnvCfg(ManagerBasedRLEnvCfg):
     # Scene settings
-    scene: Go1SceneCfg = Go1SceneCfg(num_envs=3, env_spacing=2.5)
+    scene: Go1SceneCfg = Go1SceneCfg(num_envs=3, env_spacing=1.5)
     # Basic settings
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
